@@ -1,5 +1,7 @@
 # BaiLianChatInYiTu
 
+> 仓库地址：[GitHub](https://github.com/qinylj/BaiLianChatInYiTu) · [Gitee 镜像](https://gitee.com/qinylj/BaiLianChatInYiTu)
+
 驾驶舱可视化低代码平台的**AI 对话自定义组件**（装饰 → 更多 → 「AI对话」）。
 一个组件同时接两类后端：
 

@@ -1,0 +1,80 @@
+{
+  "targetKind": "agent",
+  "targetId": "",
+  "welcomeText": "",
+  "suggestions": [],
+  "agents": [
+    {
+      "id": "agent-flood",
+      "name": "防汛事件处置建议",
+      "description": "生成对应事件的处置建议方案",
+      "avatar": "🌊",
+      "accent": "#22c55e",
+      "agentCode": "",
+      "agentVersion": "",
+      "welcome": "您好，这里是防汛事件处置建议，请描述需要处置的事件情况。",
+      "suggestions": ["当前汛情该如何处置？", "生成一份处置建议方案", "有哪些风险点需要重点防范？"],
+      "tagText": "",
+      "enabled": true
+    },
+    {
+      "id": "agent-flood-review",
+      "name": "防汛事件评价复盘",
+      "description": "生成对应事件的评价复盘报告",
+      "avatar": "🛡️",
+      "accent": "#f59e0b",
+      "agentCode": "",
+      "agentVersion": "",
+      "welcome": "您好，这里是防汛事件评价复盘，请提供需要复盘的事件信息。",
+      "suggestions": ["生成本次事件复盘报告", "处置过程有哪些不足？", "给出改进建议"],
+      "tagText": "",
+      "enabled": true
+    },
+    {
+      "id": "agent-water",
+      "name": "水污染事件处置建议",
+      "description": "生成对应事件的处置建议方案",
+      "avatar": "💧",
+      "accent": "#a855f7",
+      "agentCode": "",
+      "agentVersion": "",
+      "welcome": "您好，这里是水污染事件处置建议，请描述需要处置的事件情况。",
+      "suggestions": ["水污染事件如何处置？", "生成一份处置建议方案", "需要重点监测哪些指标？"],
+      "tagText": "",
+      "enabled": true
+    },
+    {
+      "id": "agent-water-trace",
+      "name": "水污染事件辅助溯源",
+      "description": "结合各类监测数据辅助溯源",
+      "avatar": "🔍",
+      "accent": "#06b6d4",
+      "agentCode": "",
+      "agentVersion": "",
+      "welcome": "您好，这里是水污染事件辅助溯源，请提供监测点位与异常数据。",
+      "suggestions": ["如何缩小污染源范围？", "推荐布点监测方案", "分析可能的排污行业"],
+      "tagText": "建设中",
+      "enabled": true
+    }
+  ],
+  "models": [
+    {
+      "id": "model-deepseek",
+      "name": "Deepseek",
+      "description": "运用 Deepseek-V4.1-Flash 大模型回答问题",
+      "avatar": "🧠",
+      "accent": "#4f8cff",
+      "model": "deepseek-flash",
+      "baseUrl": "https://api.deepseek.com/v1/chat/completions",
+      "apiKey": "",
+      "system": "你是一个专业、严谨的助手，回答尽量简洁准确。",
+      "temperature": 0.7,
+      "maxTokens": 2048,
+      "enabled": true
+    }
+  ],
+  "paramBindings": [
+    { "id": "param-user", "label": "user", "name": "user", "source": "public", "paramKey": "user", "value": "", "enabled": true },
+    { "id": "param-channel", "label": "channel", "name": "channel", "source": "static", "paramKey": "", "value": "大屏", "enabled": true }
+  ]
+}

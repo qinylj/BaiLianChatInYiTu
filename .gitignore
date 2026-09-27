@@ -1,0 +1,26 @@
+# 依赖与产物
+node_modules/
+dist/
+dist-ssr/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# 本地与隐私文件
+*.local
+.env
+.env.*
+!.env.example
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 调试过程产生的日志与截图（含真实会话内容，不要提交）
+*.log
+build.log
+dev-server.log
+.cdp-shots/
+.cdp-check-settings.png

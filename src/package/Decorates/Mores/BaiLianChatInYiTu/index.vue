@@ -1621,7 +1621,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.8'
+  version: '1.0.9'
 }
 </script>
 

@@ -473,7 +473,13 @@ async function main() {
         check('正文里没有残留 Markdown 加粗符号', !/\*\*/.test(doc))
 
         /* 层次序数 → 字体：落盘产物上独立复算一遍（不依赖页面里的中间结果） */
-        const paraWith = t => doc.split('<w:p>').slice(1).find(p => p.indexOf(t) >= 0) || ''
+        /* ★ 段落文本 = 同一段里**所有** <w:t> 拼起来。自打 run 按"脚本"切开
+           （数字/字母一个 run、汉字与标点一个 run），`（2025-2027年）` 在 XML 里
+           已经是 `（`+`2025`+`-`+`2027`+`年）` 五个 <w:t> —— 拿整句直接在 XML 里
+           indexOf **必然找不到**。凡是"找一句话"的断言都得走这个拼接后的文本。 */
+        const paraText = p =>
+          (p.match(/<w:t[^>]*>[\s\S]*?<\/w:t>/g) || []).map(t => t.replace(/<[^>]+>/g, '')).join('')
+        const paraWith = t => doc.split('<w:p>').slice(1).find(p => paraText(p).indexOf(t) >= 0) || ''
         check('第一层「一、总体要求」用方正黑体_GBK',
           /方正黑体_GBK/.test(paraWith('一、总体要求')))
         check('第二层「（一）指导思想」用方正楷体_GBK',
@@ -496,7 +502,8 @@ async function main() {
         check('引号旁边的空格清掉（依据“安全生产法” 与 …）',
           doc.indexOf('依据“安全生产法”与“危化品管理条例”编制。') >= 0)
         check('有序列表序号后面不留空格（1. 先期处置 → 1.先期处置）',
-          doc.indexOf('1.先期处置：现场人员立即撤离至上风向。') >= 0)
+          !!paraWith('1.先期处置：现场人员立即撤离至上风向。'),
+          doc.split('<w:p>').slice(1).map(paraText).filter(t => t.indexOf('先期处置') >= 0))
 
         /* 多余空格：落盘产物里必须已经被清掉（只看 <w:t> 里的真实文本，不看 XML 排版） */
         const tNodes = (doc.match(/<w:t[^>]*>[\s\S]*?<\/w:t>/g) || []).map(t =>
@@ -511,8 +518,6 @@ async function main() {
            ★ 这里按"整段文字恰好等于"来筛 —— 早先按 /应急指挥部/ 之类的子串筛，
              样本里新加的「由应急指挥部统一指挥」会一起被捞进来，段数就对不上了。 */
         check('手动换行符换成了回车（落盘正文里 <w:br/> 数为 0）', doc.indexOf('<w:br/>') < 0)
-        const paraText = p =>
-          (p.match(/<w:t[^>]*>[\s\S]*?<\/w:t>/g) || []).map(t => t.replace(/<[^>]+>/g, '')).join('')
         const shortParas = doc
           .split('<w:p>')
           .slice(1)
@@ -553,6 +558,63 @@ async function main() {
           noTblDoc.split('<w:p>').slice(1)
             .filter(p => paraText(p).trim() && !/<w:jc w:val="center"/.test(p))
             .map(p => (p.match(/w:firstLineChars="\d+"/) || ['(无)'])[0]))
+
+        /* ★ 页眉页脚 / 页码（双面打印）/ 段前段后 / 字体分流 —— 都在落盘文件上验 */
+        check('页眉距边界 1.5 cm（header=850）、页脚距边界 2.6 cm（footer=1474）',
+          /w:header="850"/.test(doc) && /w:footer="1474"/.test(doc),
+          (doc.match(/<w:pgMar[^>]*>/) || [])[0])
+        check('包里有两份页脚 part（footer1 = 奇数页、footer2 = 偶数页）',
+          names.indexOf('word/footer1.xml') >= 0 && names.indexOf('word/footer2.xml') >= 0, names)
+        const sett = names.indexOf('word/settings.xml') >= 0
+          ? readZipEntry(buf, 'word/settings.xml').toString('utf8')
+          : ''
+        check('settings 开了「奇偶页页脚不同」（evenAndOddHeaders，不开就只认 footer1）',
+          /<w:evenAndOddHeaders\/>/.test(sett))
+        const f1 = names.indexOf('word/footer1.xml') >= 0
+          ? readZipEntry(buf, 'word/footer1.xml').toString('utf8')
+          : ''
+        const f2 = names.indexOf('word/footer2.xml') >= 0
+          ? readZipEntry(buf, 'word/footer2.xml').toString('utf8')
+          : ''
+        check('单页（奇数页）页码居右、双页（偶数页）页码居左',
+          /<w:jc w:val="right"\/>/.test(f1) && /<w:jc w:val="left"\/>/.test(f2))
+        check('页码：宋体四号（sz=28）、行距固定 15 磅、文本前后各 1 字符（leftChars/rightChars=100）',
+          /w:eastAsia="宋体"/.test(f1) && /<w:sz w:val="28"\/>/.test(f1) &&
+            /<w:spacing w:line="300" w:lineRule="exact"\/>/.test(f1) &&
+            /w:leftChars="100"[^>]*w:rightChars="100"/.test(f1),
+          (f1.match(/<w:spacing[^/]*\/>|<w:ind[^>]*>/g) || []))
+        check('页脚自身那个空段落行距固定 8 磅（line=160 exact）',
+          /<w:spacing w:line="160" w:lineRule="exact"\/>/.test(f1))
+        check('页码是 PAGE 域（两份页脚都要有，否则某一面页码会变哑）',
+          /w:instr=" PAGE "/.test(f1) && /w:instr=" PAGE "/.test(f2))
+        check('★ 页脚里没有 Times New Roman（「页码宋体」是专门规定，不跟数字分流）',
+          f1.indexOf('Times New Roman') < 0 && f2.indexOf('Times New Roman') < 0)
+        const tP = doc.split('<w:p>').slice(1).find(p => paraText(p) === '危险化学品事故应急预案')
+        const sP = doc.split('<w:p>').slice(1).find(p => paraText(p) === '（2025-2027年）')
+        check('标题段前段后均为 0 行（显式写 0，不是"没写属性"）',
+          !!tP && /w:beforeLines="0"/.test(tP) && /w:afterLines="0"/.test(tP),
+          tP ? (tP.match(/<w:spacing[^/]*\/>/) || ['(无)'])[0] : '(没找到标题段)')
+        check('副标题段前段后均为 0 行（副标题要贴着标题）',
+          !!sP && /w:beforeLines="0"/.test(sP) && /w:afterLines="0"/.test(sP),
+          sP ? (sP.match(/<w:spacing[^/]*\/>/) || ['(无)'])[0] : '(没找到副标题段)')
+        const docRuns = (doc.match(/<w:r>[\s\S]*?<\/w:r>/g) || [])
+          .map(r => ({
+            t: (r.match(/<w:t[^>]*>([^<]*)<\/w:t>/) || ['', ''])[1],
+            ascii: (r.match(/w:ascii="([^"]+)"/) || ['', ''])[1],
+            east: (r.match(/w:eastAsia="([^"]+)"/) || ['', ''])[1]
+          }))
+          .filter(r => r.t)
+        check('★ 落盘文件里用 Times New Roman 的 run 只有数字/字母/空格',
+          docRuns.filter(r => r.ascii === 'Times New Roman' && /[^0-9A-Za-z ]/.test(r.t)).length === 0,
+          docRuns.filter(r => r.ascii === 'Times New Roman' && /[^0-9A-Za-z ]/.test(r.t)))
+        check('★ 落盘文件里含数字或字母的 run 一定给了 Times New Roman（一个不漏）',
+          docRuns.filter(r => r.ascii !== 'Times New Roman' && /[0-9A-Za-z]/.test(r.t)).length === 0,
+          docRuns.filter(r => r.ascii !== 'Times New Roman' && /[0-9A-Za-z]/.test(r.t)))
+        check('标点与符号用中日韩字体（`，``。``“”` 所在 run 的 ascii == eastAsia）',
+          docRuns.filter(r => /[—·“”（）。，：]/.test(r.t)).length > 0 &&
+            docRuns.filter(r => /[—·“”（）。，：]/.test(r.t))
+              .every(r => r.ascii === r.east && r.ascii !== 'Times New Roman'),
+          docRuns.filter(r => /[—·“”（）。，：]/.test(r.t)).slice(0, 4))
       }
       const py = await pythonVerify(p)
       check('Python zipfile 校验落盘文件通过（CRC + XML 独立验证）', py.ok, py.out || py.err)

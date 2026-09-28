@@ -134,7 +134,7 @@ def check_docx_gongwen(path):
     check_zip_hygiene(parts, 'docx')
 
     for need in ['word/document.xml', 'word/styles.xml', 'word/settings.xml',
-                 'word/footer1.xml', 'word/_rels/document.xml.rels',
+                 'word/footer1.xml', 'word/footer2.xml', 'word/_rels/document.xml.rels',
                  '_rels/.rels', 'docProps/core.xml', 'docProps/app.xml']:
         ck('包含 ' + need, need in parts)
 
@@ -693,6 +693,143 @@ def check_page_layout(path):
        any('响应时间缩短至 5 分钟' in t for t in texts))
 
 
+def check_page_footer(path, frame_path):
+    """页眉 1.5 / 页脚 2.6 cm、页码双面打印（单页右 / 双页左）、标题副标题段前段后 0 行、
+       字体分流（只有数字和字母用 Times New Roman）—— 全部独立复算一遍。
+
+       ★ 这里不引用 JS 那边的任何常量：cm → twip 的换算、行距的磅数、缩进折算的
+         twip 都由本脚本自己再推导一次，只把"规范给的数字"当输入。"""
+    section('【J】docx —— 页眉页脚 / 页码（双面打印）/ 段前段后 / 字体分流')
+    parts = load(path)
+    if not parts:
+        return
+    check_zip_hygiene(parts, 'docx-page')
+
+    # 规范给的原始值：页眉 1.5 cm、页脚 2.6 cm —— 自己换算成 twip
+    mm = lambda v: round(v * 1440 / 25.4)
+    pt = lambda v: round(v * 20)
+
+    doc = parse(parts, 'word/document.xml')
+    if doc is None:
+        return
+    sect = doc.find(W + 'body/' + W + 'sectPr')
+    mar = sect.find(W + 'pgMar') if sect is not None else None
+    ck('页眉距边界 1.5 cm（%d twips）' % mm(15),
+       mar is not None and mar.get(W + 'header') == str(mm(15)),
+       (mar.get(W + 'header') if mar is not None else None, mm(15)))
+    ck('页脚距边界 2.6 cm（%d twips）' % mm(26),
+       mar is not None and mar.get(W + 'footer') == str(mm(26)),
+       (mar.get(W + 'footer') if mar is not None else None, mm(26)))
+    ck('页边距四项仍是 上3.5/下2.9/左2.55/右2.55 cm',
+       mar is not None and mar.get(W + 'top') == str(mm(35)) and mar.get(W + 'bottom') == str(mm(29))
+       and mar.get(W + 'left') == str(mm(25.5)) and mar.get(W + 'right') == str(mm(25.5)),
+       mar.attrib if mar is not None else None)
+
+    sett = parse(parts, 'word/settings.xml')
+    ck('settings 里有 w:evenAndOddHeaders（奇偶页页脚不同的总开关）',
+       sett is not None and sett.find(W + 'evenAndOddHeaders') is not None)
+
+    # ---- 两份页脚 + rels 解析（default=奇数页、even=偶数页）----
+    rid = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
+    refs = sect.findall(W + 'footerReference') if sect is not None else []
+    ck('sectPr 引用两份页脚，顺序是 default / even',
+       [r.get(W + 'type') for r in refs] == ['default', 'even'],
+       [r.get(W + 'type') for r in refs])
+    rels = parse(parts, 'word/_rels/document.xml.rels')
+    byid = {}
+    if rels is not None:
+        for rel in rels.findall(RELS + 'Relationship'):
+            byid[rel.get('Id')] = rel.get('Target')
+    ck('关系 id 分别指向 footer1.xml（奇数页）/ footer2.xml（偶数页）',
+       [byid.get(r.get(rid)) for r in refs] == ['footer1.xml', 'footer2.xml'],
+       [byid.get(r.get(rid)) for r in refs])
+
+    ct = parse(parts, '[Content_Types].xml')
+    declared = set()
+    if ct is not None:
+        for ov in ct.findall(CT + 'Override'):
+            declared.add((ov.get('PartName') or '').lstrip('/'))
+    ck('Content_Types 声明了两份 footer part',
+       {'word/footer1.xml', 'word/footer2.xml'} <= declared, sorted(declared))
+
+    for name, want_jc, label in (('word/footer1.xml', 'right', '奇数页（单页）居右'),
+                                 ('word/footer2.xml', 'left', '偶数页（双页）居左')):
+        ftr = parse(parts, name)
+        if ftr is None:
+            continue
+        ps = ftr.findall(W + 'p')
+        ck(name + '：两段（页脚自身的空段 + 页码行）', len(ps) == 2, len(ps))
+        if len(ps) != 2:
+            continue
+        sp0 = ps[0].find(W + 'pPr/' + W + 'spacing')
+        ck(name + '：页脚空段行距固定 %d 磅' % 8,
+           sp0 is not None and sp0.get(W + 'line') == str(pt(8)) and sp0.get(W + 'lineRule') == 'exact',
+           sp0.attrib if sp0 is not None else None)
+        ck(name + '：空段里没有文字（就是用来摆纵向位置的）',
+           all_text(ps[0], W + 't') == '', repr(all_text(ps[0], W + 't')))
+        sp1 = ps[1].find(W + 'pPr/' + W + 'spacing')
+        ck(name + '：页码行行距固定 %d 磅' % 15,
+           sp1 is not None and sp1.get(W + 'line') == str(pt(15)) and sp1.get(W + 'lineRule') == 'exact',
+           sp1.attrib if sp1 is not None else None)
+        ind = ps[1].find(W + 'pPr/' + W + 'ind')
+        ck(name + '：页码文本前后各 1 字符（四号字 = 280 twips）',
+           ind is not None and ind.get(W + 'leftChars') == '100' and ind.get(W + 'rightChars') == '100'
+           and ind.get(W + 'left') == '280' and ind.get(W + 'right') == '280',
+           ind.attrib if ind is not None else None)
+        jc = ps[1].find(W + 'pPr/' + W + 'jc')
+        ck(name + '：' + label, jc is not None and jc.get(W + 'val') == want_jc,
+           jc.attrib if jc is not None else None)
+        instrs = [f.get(W + 'instr') for f in ps[1].iter(W + 'fldSimple')]
+        ck(name + '：页码是 PAGE 域（自动页码，不是写死的数字）',
+           any((i or '').strip() == 'PAGE' for i in instrs), instrs)
+        sizes, fonts_bad = set(), []
+        for r in ps[1].iter(W + 'r'):
+            rp = r.find(W + 'rPr')
+            f = rp.find(W + 'rFonts') if rp is not None else None
+            sz = rp.find(W + 'sz') if rp is not None else None
+            if f is not None:
+                for k in ('ascii', 'hAnsi', 'eastAsia'):
+                    if f.get(W + k) != '宋体':
+                        fonts_bad.append((k, f.get(W + k)))
+            if sz is not None:
+                sizes.add(sz.get(W + 'val'))
+        ck(name + '：页码字体宋体四号（三种字体槽都是宋体，sz=28）',
+           not fonts_bad and sizes == {'28'}, (fonts_bad, sorted(sizes)))
+        ck(name + '：页脚里一个 Times New Roman 都没有（「页码宋体」是专门规定）',
+           b'Times New Roman' not in parts[name])
+
+    # ---- 标题与副标题段前段后 0 行（换一份带副标题的产物）----
+    fparts = load(frame_path)
+    if fparts:
+        fdoc = parse(fparts, 'word/document.xml')
+        fparas = fdoc.find(W + 'body').findall(W + 'p') if fdoc is not None else []
+        for want in ('长寿区数字重庆建设三年行动计划', '（2025-2027年）'):
+            hit = next((x for x in fparas if all_text(x, W + 't') == want), None)
+            sp = hit.find(W + 'pPr/' + W + 'spacing') if hit is not None else None
+            ck('「%s」段前段后均为 0 行（显式写 0）' % want,
+               sp is not None and sp.get(W + 'beforeLines') == '0' and sp.get(W + 'afterLines') == '0',
+               sp.attrib if sp is not None else '(没找到这一段)')
+
+    # ---- 字体分流：只有数字和字母用 Times New Roman ----
+    runs = []
+    for r in doc.iter(W + 'r'):
+        t = all_text(r, W + 't')
+        rp = r.find(W + 'rPr')
+        f = rp.find(W + 'rFonts') if rp is not None else None
+        if t and f is not None:
+            runs.append((t, f.get(W + 'ascii'), f.get(W + 'eastAsia')))
+    ck('样本里两种 run 都有（下面两条不是空断言）',
+       any(a == 'Times New Roman' for _, a, _ in runs) and any(a == '方正仿宋_GBK' for _, a, _ in runs),
+       len(runs))
+    bad_west = [(t, a) for t, a, _ in runs if a == 'Times New Roman' and re.search(r'[^0-9A-Za-z ]', t)]
+    ck('★ 用 Times New Roman 的 run 里只有数字/字母/空格', not bad_west, bad_west)
+    bad_cjk = [(t, a) for t, a, _ in runs if a != 'Times New Roman' and re.search(r'[0-9A-Za-z]', t)]
+    ck('★ 含数字或字母的 run 一律给了 Times New Roman', not bad_cjk, bad_cjk)
+    punct = [(t, a, e) for t, a, e in runs if re.search(r'[—·\u201c\u201d（）%。，、；：]', t)]
+    ck('标点与符号落在中日韩字体一侧（ascii == eastAsia，且都不是 Times New Roman）',
+       bool(punct) and all(a == e and a != 'Times New Roman' for _, a, e in punct), punct)
+
+
 def main():
     print('=' * 68)
     print('导出产物校验（Python 标准库独立实现：zipfile 验 CRC，ElementTree 验 XML）')
@@ -706,6 +843,7 @@ def main():
     check_ordinal(p('case-ordinal.docx'))
     check_frame(p('case-frame.docx'))
     check_page_layout(p('case-layout.docx'))
+    check_page_footer(p('case-page.docx'), p('case-frame.docx'))
     check_txt(p('case-content.txt'))
     check_md(p('case-content.md'))
 

@@ -12,6 +12,11 @@
  *        （中英文之间、数字前后的空格不能误伤）
  *   【2.7】标题块：副标题（`（2025-2027年）` → 三号楷体居中）、前言留在标题上面、
  *        emoji 只清导出物不清原数据
+ *   【2.9】版面：一律首行缩进 2 字符（不悬挂 / 不用"文本之前"）、列表不带项目符号、
+ *        表格后面不留空行
+ *   【2.11】页眉 1.5 / 页脚 2.6 cm、页码双面打印（单页右 / 双页左、宋体四号、
+ *        行距固定 15 磅、文本前后各 1 字符）、标题与副标题段前段后 0 行、
+ *        字体分流（只有数字和字母用 Times New Roman，标点符号用中日韩字体）
  *   【3】zip 结构自解析 —— 用独立的解析代码读回中央目录，逐个核对 CRC 与大小
  *   【4】调用 tools/verify_ooxml.py（zipfile + ElementTree）做跨语言交叉验证
  *   【5】Node 产物落盘位置与体积
@@ -776,6 +781,171 @@ function groupLayout(exporter) {
     tblOnlyXml.indexOf('</w:tbl>') > 0 && tblOnlyXml.indexOf('<w:sectPr') > 0)
 }
 
+/* ------------------------------ 【2.11】页眉页脚与页码 ------------------------------ */
+
+/** 页眉 1.5 / 页脚 2.6 cm、页码双面打印、只有数字和字母用 Times New Roman */
+const PAGE_SAMPLE = [
+  '以下是为长寿区编制的**专项规划框架**：',
+  '',
+  '# 长寿区数字重庆建设三年行动计划',
+  '',
+  '（2025-2027年）',
+  '',
+  '依据 GB/T 9704 标准，共 30 人参与，投入 3.5 万元（占 20%）。',
+  '',
+  '打造“数字长寿·智联江城”品牌——全市示范。',
+  '',
+  '| 领域 | 目标值 |',
+  '| --- | --- |',
+  '| 数字经济 | 15% |'
+].join('\n')
+
+/** 逐 run 取出文本与它实际用到的西文/中日韩字体 */
+const runsOfXml = xml => {
+  const rs = xml.match(/<w:r>[\s\S]*?<\/w:r>/g) || []
+  return rs
+    .map(r => ({
+      t: (r.match(/<w:t[^>]*>([^<]*)<\/w:t>/) || ['', ''])[1],
+      ascii: (r.match(/w:ascii="([^"]+)"/) || ['', ''])[1],
+      east: (r.match(/w:eastAsia="([^"]+)"/) || ['', ''])[1]
+    }))
+    .filter(r => r.t)
+}
+
+function groupPage(exporter, docx, md) {
+  section('【2.11】页眉页脚 / 页码（双面打印）/ 字体分流（只有数字字母用 Times New Roman）')
+
+  const res = exporter.buildOfficeExport(PAGE_SAMPLE, {
+    preset: 'gongwen',
+    meta: ['导出时间：2026/9/29 01:10'],
+    when: new Date(2026, 8, 29, 1, 10)
+  })
+  const buf = Buffer.from(res.bytes)
+  const xml = readZipEntry(buf, 'word/document.xml').toString('utf8')
+  const sett = readZipEntry(buf, 'word/settings.xml').toString('utf8')
+  const f1 = readZipEntry(buf, 'word/footer1.xml').toString('utf8')
+  const f2 = readZipEntry(buf, 'word/footer2.xml').toString('utf8')
+  const rels = readZipEntry(buf, 'word/_rels/document.xml.rels').toString('utf8')
+  const ct = readZipEntry(buf, '[Content_Types].xml').toString('utf8')
+
+  /* ---------- 一、页面设置：页眉 1.5 / 页脚 2.6 cm ---------- */
+  check('页眉距边界 1.5 cm（w:header=850）', /w:header="850"/.test(xml), (xml.match(/<w:pgMar[^>]*>/) || [])[0])
+  check('页脚距边界 2.6 cm（w:footer=1474）', /w:footer="1474"/.test(xml), (xml.match(/<w:pgMar[^>]*>/) || [])[0])
+  check('页边距 上3.5/下2.9/左2.55/右2.55 cm 没被顺手改掉',
+    /w:top="1984" w:right="1446" w:bottom="1644" w:left="1446"/.test(xml))
+
+  /* ---------- 二、页码：双面打印（单页右、双页左） ---------- */
+  check('settings 里有 w:evenAndOddHeaders（不开它 Word 只认 default 那份页脚）',
+    /<w:evenAndOddHeaders\/>/.test(sett), sett.slice(0, 200))
+  check('sectPr 同时引用 default（奇数页）与 even（偶数页）两份页脚',
+    /<w:footerReference w:type="default" r:id="rId3"\/><w:footerReference w:type="even" r:id="rId4"\/>/.test(xml),
+    (xml.match(/<w:footerReference[^>]*>/g) || []))
+  check('document.xml.rels 里 rId3→footer1.xml、rId4→footer2.xml',
+    /Id="rId3"[^>]*Target="footer1\.xml"/.test(rels) && /Id="rId4"[^>]*Target="footer2\.xml"/.test(rels),
+    (rels.match(/Id="rId[34]"[^>]*>/g) || []))
+  check('Content_Types 声明了两份 footer 的 MIME',
+    /PartName="\/word\/footer1\.xml"/.test(ct) && /PartName="\/word\/footer2\.xml"/.test(ct))
+  check('单页（奇数页）页码居右', /<w:jc w:val="right"\/>/.test(f1))
+  check('双页（偶数页）页码居左', /<w:jc w:val="left"\/>/.test(f2))
+  check('两份页脚都带 PAGE 域（自动页码，不是写死的 1）',
+    /w:instr=" PAGE "/.test(f1) && /w:instr=" PAGE "/.test(f2))
+  check('页码行行距固定值 15 磅（line=300 exact）',
+    /<w:spacing w:line="300" w:lineRule="exact"\/>/.test(f1), (f1.match(/<w:spacing[^/]*\/>/g) || []))
+  check('页脚自身那个空段落行距固定值 8 磅（line=160 exact）',
+    /<w:spacing w:line="160" w:lineRule="exact"\/>/.test(f1), (f1.match(/<w:spacing[^/]*\/>/g) || []))
+  check('页码文本前后各空 1 字符（leftChars/rightChars=100，四号字折 280 twip）',
+    /w:leftChars="100" w:left="280" w:rightChars="100" w:right="280"/.test(f1),
+    (f1.match(/<w:ind[^>]*>/) || [])[0])
+  check('页码字体宋体四号（eastAsia=宋体 且 sz=28）',
+    /w:eastAsia="宋体"/.test(f1) && /<w:sz w:val="28"\/>/.test(f1))
+  check('★ 页脚里没有 Times New Roman（「页码字体为宋体四号」是专门规定，优先于"数字用西文字体"的通则）',
+    f1.indexOf('Times New Roman') < 0 && f2.indexOf('Times New Roman') < 0)
+  check('页脚里每个 run 的 ascii 与 eastAsia 都是宋体（连一字线也是）',
+    runsOfXml(f1).every(r => r.ascii === '宋体' && r.east === '宋体'), runsOfXml(f1))
+
+  /* ---------- 三、标题与副标题段前段后均为 0 行 ---------- */
+  const paras = xml.split('<w:p>').slice(1)
+  const titleP = paras.find(p => textOf(p) === '长寿区数字重庆建设三年行动计划')
+  const subP = paras.find(p => textOf(p) === '（2025-2027年）')
+  check('标题段前段后均 0 行（显式写 0，不是"没写属性"）',
+    !!titleP && /w:beforeLines="0"/.test(titleP) && /w:afterLines="0"/.test(titleP),
+    titleP ? (titleP.match(/<w:spacing[^/]*\/>/) || [])[0] : '(没找到标题段)')
+  check('副标题段前段后均 0 行（副标题要贴着标题，中间不空行）',
+    !!subP && /w:beforeLines="0"/.test(subP) && /w:afterLines="0"/.test(subP),
+    subP ? (subP.match(/<w:spacing[^/]*\/>/) || [])[0] : '(没找到副标题段)')
+  check('标题仍是二号小标宋居中、副标题仍是三号楷体居中',
+    !!titleP && /w:eastAsia="方正小标宋_GBK"/.test(titleP) && /<w:sz w:val="44"\/>/.test(titleP) &&
+      /<w:jc w:val="center"\/>/.test(titleP) &&
+      !!subP && /w:eastAsia="方正楷体_GBK"/.test(subP) && /<w:jc w:val="center"\/>/.test(subP))
+  check('段前段后 0 行只加在标题块上，正文还是首行缩进 2 字符 + 594 固定行距',
+    paras.filter(p => textOf(p).indexOf('依据 GB/T 9704') === 0)
+      .every(p => /w:firstLineChars="200"/.test(p) && /w:line="594" w:lineRule="exact"/.test(p) &&
+        !/w:beforeLines/.test(p)))
+
+  /* ---------- 四、字体分流：只有数字和字母用 Times New Roman ---------- */
+  const runs = runsOfXml(xml)
+  check('样本里确实两种 run 都有（否则下面两条是空断言）',
+    runs.some(r => r.ascii === 'Times New Roman') && runs.some(r => r.ascii === '方正仿宋_GBK'),
+    runs.length)
+  check('★ 用 Times New Roman 的 run 里**只有**数字/字母/空格',
+    runs.filter(r => r.ascii === 'Times New Roman' && /[^0-9A-Za-z ]/.test(r.t)).length === 0,
+    runs.filter(r => r.ascii === 'Times New Roman' && /[^0-9A-Za-z ]/.test(r.t)))
+  check('★ 含数字或字母的 run 一定给了 Times New Roman（一个都不能漏）',
+    runs.filter(r => r.ascii !== 'Times New Roman' && /[0-9A-Za-z]/.test(r.t)).length === 0,
+    runs.filter(r => r.ascii !== 'Times New Roman' && /[0-9A-Za-z]/.test(r.t)))
+  const punctRuns = runs.filter(r => /[—·“”（）%。，、；：]/.test(r.t))
+  check('标点与符号（— · “” （） % 。，）落在中日韩字体那一侧（ascii == eastAsia）',
+    punctRuns.length > 0 && punctRuns.every(r => r.ascii === r.east && r.ascii !== 'Times New Roman'),
+    punctRuns)
+  check('GB/T 被斜杠切开后 "GB" 与 "T" 各自仍是 Times New Roman（斜杠本身用正文字体）',
+    runs.some(r => r.t === 'GB' && r.ascii === 'Times New Roman') &&
+      runs.some(r => r.t === '/' && r.ascii === '方正仿宋_GBK'),
+    runs.filter(r => r.t.indexOf('GB') >= 0 || r.t === '/'))
+  check('表格单元格里的数字也是 Times New Roman（分流不只在正文生效）',
+    runs.some(r => r.t === '15' && r.ascii === 'Times New Roman'),
+    runs.filter(r => r.t.indexOf('15') >= 0))
+  /* 行内代码是唯一的例外：代码用等宽字体，不受"字母用 Times New Roman"约束 */
+  const codeXml = readZipEntry(
+    Buffer.from(exporter.buildOfficeExport('取 `code123` 一段。', {
+      preset: 'gongwen',
+      when: new Date(2026, 8, 29, 1, 10)
+    }).bytes),
+    'word/document.xml'
+  ).toString('utf8')
+  check('行内代码里的字母是等宽字体 Consolas（代码不算"正文里的字母"）',
+    runsOfXml(codeXml).some(r => r.t === 'code123' && r.ascii === 'Consolas'),
+    runsOfXml(codeXml))
+
+  /* ---------- 五、splitByScript 单元用例（纯函数，直接断言） ---------- */
+  const seg = t => docx.splitByScript(t).map(x => (x.latin ? 'L:' : 'C:') + x.text).join('|')
+  check('splitByScript：汉字一段、数字一段', seg('共 30 人') === 'C:共 |L:30 |C:人', seg('共 30 人'))
+  check('splitByScript：空格是中立字符，`GB 18218` 不会被切成三段',
+    seg('GB 18218') === 'L:GB 18218', seg('GB 18218'))
+  check('splitByScript：`（2025-2027年）` → 括号/连字符归中日韩一侧',
+    seg('（2025-2027年）') === 'C:（|L:2025|C:-|L:2027|C:年）', seg('（2025-2027年）'))
+  check('splitByScript：小数点归中日韩一侧（`3.5` → 3 / . / 5）', seg('3.5') === 'L:3|C:.|L:5', seg('3.5'))
+  check('splitByScript：`— 1 —` 里只有那个 1 是西文', seg('— 1 —') === 'C:— |L:1 |C:—', seg('— 1 —'))
+  check('splitByScript：行首空格的分类跟它后面第一个实字符走',
+    seg('  前') === 'C:  前' && seg('  2025') === 'L:  2025', seg('  前') + ' / ' + seg('  2025'))
+  check('splitByScript：空串返回空数组、纯数字只有一段',
+    docx.splitByScript('').length === 0 && docx.splitByScript('2025').length === 1,
+    docx.splitByScript('2025'))
+
+  /* ---------- 六、页码开关在 docx 层（exporter 不转发它，所以直接打这一层） ---------- */
+  const plainBlocks = md.parseMarkdownBlocks('# 标题\n\n正文一段。')
+  const plainBuf = Buffer.from(docx.buildDocx(plainBlocks, { preset: 'plain', when: new Date(2026, 8, 29, 1, 10) }))
+  check('plain 预设默认不带页脚（页脚口径是公文那套）',
+    readZipEntry(plainBuf, 'word/document.xml').toString('utf8').indexOf('footerReference') < 0 &&
+      readZipEntry(plainBuf, 'word/settings.xml').toString('utf8').indexOf('evenAndOddHeaders') < 0)
+  const plainNumBuf = Buffer.from(
+    docx.buildDocx(plainBlocks, { preset: 'plain', pageNumber: true, when: new Date(2026, 8, 29, 1, 10) })
+  )
+  check('★ 分页开关一旦打开，**任何预设**都是双份页脚 + 奇偶页开关（别把开关写进公文的 if 里）',
+    readZipEntry(plainNumBuf, 'word/document.xml').toString('utf8').indexOf('w:type="even"') > 0 &&
+      readZipEntry(plainNumBuf, 'word/settings.xml').toString('utf8').indexOf('evenAndOddHeaders') > 0 &&
+      readZipEntry(plainNumBuf, 'word/footer2.xml').toString('utf8').indexOf('<w:jc w:val="left"/>') > 0)
+}
+
 /* ------------------------------ 【3】zip 自解析 ------------------------------ */
 
 /** 独立实现一个最小 zip 解析器：从 EOCD 读中央目录，再按偏移取本地项 */
@@ -980,6 +1150,13 @@ function groupArtifacts(exporter) {
     ['case-layout.docx', exporter.buildOfficeExport(LAYOUT_SAMPLE, {
       preset: 'gongwen',
       when: new Date(2026, 8, 29, 0, 30)
+    })],
+    // 给 Python 侧验页眉页脚 / 页码 / 段前段后 / 字体分流（故意不含行内代码 ——
+    // 代码用等宽字体是另一条规则，混在一起会让"含字母的 run 必是 Times New Roman"说不清）
+    ['case-page.docx', exporter.buildOfficeExport(PAGE_SAMPLE, {
+      preset: 'gongwen',
+      meta: ['导出时间：2026/9/29 01:10'],
+      when: new Date(2026, 8, 29, 1, 10)
     })]
   ]
 
@@ -1036,6 +1213,7 @@ async function main() {
   groupOrdinal(docx, exporter)
   groupFrame(docx, exporter)
   groupLayout(exporter)
+  groupPage(exporter, docx, md)
   groupZip(zip)
   groupArtifacts(exporter)
   await groupPython()

@@ -3,10 +3,21 @@
  *
  * 两个预设：
  *   gongwen —— 党政机关公文格式（默认值，参数见 GONGWEN 那张表）：
- *              页边距上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm，
+ *              页边距上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm，页眉 1.5 / 页脚 2.6 cm，
  *              正文方正仿宋_GBK 三号，行距**固定值 29.7 磅**，首行缩进 2 字符，
- *              标题方正小标宋_GBK 二号居中，页脚页码「— 1 —」。
+ *              标题方正小标宋_GBK 二号居中，标题与副标题**段前段后均 0 行**，
+ *              页脚页码「— 1 —」宋体四号、行距固定值 15 磅、文本前后各空 1 字符，
+ *              双面打印（单页居右、双页居左，见 footerXml）。
  *   plain   —— 普通文档：1 英寸页边距、小四宋体、1.5 倍行距。给"不想要公文壳子"的场景。
+ *
+ * ★ 字体分流：**只有数字和字母用西文字体（Times New Roman）**，其余（汉字、标点、
+ *   符号）一律用"该层级的字体或正文字体"。用户原话：「只有数字和字母用 Times New Roman，
+ *   其他的字体均用对应的层级或者正文字体（包括符号等）」。
+ *   注意 Word 的字体是**按码位分流**的（ascii / hAnsi / eastAsia），光设 eastAsia 不够：
+ *   `—`(U+2014)、`“”`(U+201C)、`…`、`·`、`-`、`(`、`.` 都在西文码位里，会被渲染成
+ *   Times New Roman。所以每个 run 还要按脚本切开 —— 见 splitByScript / rPrXml / runXml。
+ *   唯一的例外是**页码**：规范另外指定「页码字体为宋体四号」，那条是专门规定，
+ *   优先于这条通则（整份页脚都用宋体，不拆）。
  *
  * ★ 公文正文的"层次"不是靠 Markdown 的 # 层级，而是靠**行首的序数**：
  *     一、        → 第一层，方正黑体_GBK
@@ -67,6 +78,7 @@ import {
   esc,
   escAttr,
   mm,
+  pt,
   FONT_SIZE,
   contentTypesXml,
   rootRelsXml,
@@ -128,13 +140,20 @@ interface Layout {
   latin: string
   mono: string
   pageNumberSize: number
+  /** 页脚里那个空段落的固定行距（1/20 磅）—— 规范：页脚行距固定值 8 磅 */
+  footerLine: number
+  /** 页码行的固定行距（1/20 磅）—— 规范：页码行距固定值 15 磅 */
+  pageNumberLine: number
+  /** 页码文本前后的缩进（百分之一字符）—— 规范：文本前后均为 1 字符 */
+  pageNumberIndent: number
 }
 
 const GONGWEN: Layout = {
   // A4：210 × 297 mm
   page: { w: mm(210), h: mm(297) },
-  // 页面设置：上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm → 版心 159 × 233 mm
-  margin: { top: mm(35), right: mm(25.5), bottom: mm(29), left: mm(25.5), header: mm(15), footer: mm(17.5) },
+  // 页面设置：上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm（版心 159 × 233 mm），
+  // 页眉距边界 1.5 cm、页脚距边界 2.6 cm
+  margin: { top: mm(35), right: mm(25.5), bottom: mm(29), left: mm(25.5), header: mm(15), footer: mm(26) },
   // 正文格式：行距**固定值 29.7 磅** = 594 二十分之一磅
   // （版心高 233mm ≈ 660.5pt，660.5 / 29.7 ≈ 22.2 → 一页正好排 22 行）
   line: 594,
@@ -149,7 +168,11 @@ const GONGWEN: Layout = {
   code: { size: FONT_SIZE.wuhao },
   latin: 'Times New Roman',
   mono: 'Consolas',
-  pageNumberSize: FONT_SIZE.sihao
+  pageNumberSize: FONT_SIZE.sihao,
+  // 页脚：空段落行距固定值 8 磅；页码行距固定值 15 磅、前后各空 1 字符
+  footerLine: pt(8),
+  pageNumberLine: pt(15),
+  pageNumberIndent: 100
 }
 
 const PLAIN: Layout = {
@@ -166,7 +189,10 @@ const PLAIN: Layout = {
   code: { size: FONT_SIZE.xiaosi },
   latin: 'Arial',
   mono: 'Consolas',
-  pageNumberSize: FONT_SIZE.xiaosi
+  pageNumberSize: FONT_SIZE.xiaosi,
+  footerLine: pt(8),
+  pageNumberLine: pt(15),
+  pageNumberIndent: 100
 }
 
 /* ==================================================================== *
@@ -236,14 +262,65 @@ interface RunStyle {
 }
 
 /**
+ * 只有数字和字母走西文字体 —— 用户口径：「只有数字和字母用 Times New Roman，
+ * 其他的字体均用对应的层级或者正文字体（包括符号等）」。
+ *
+ * 光把 `w:eastAsia` 设对是不够的：Word 的字体是**按码位分流**的，
+ * `ascii` 管 U+0000–U+007F、`hAnsi` 管其余西文码位、汉字才走 `eastAsia`。
+ * 而 `—`(U+2014)、`“”‘’`(U+201C–201D)、`…`、`·`、`-`、`(`、`.` 全落在西文码位里，
+ * 于是"中文字体设对了、标点却渲染成 Times New Roman"。所以每个 run 还要再按脚本切开。
+ */
+const LATIN_CHAR = /[0-9A-Za-z]/
+
+/**
+ * 按脚本切段：`true` = 只有数字/字母（走西文字体），`false` = 其余（汉字、标点、符号）。
+ *
+ * ★ 空格是**中立**字符：跟前一个实字符同类（行首的空格跟后一个），
+ *   否则「GB 18218」会被空格切成三段，白白多出两个 run。
+ */
+export function splitByScript(text: string): Array<{ text: string; latin: boolean }> {
+  const s = String(text == null ? '' : text)
+  if (!s) return []
+
+  const cls: boolean[] = []
+  let prev: boolean | null = null
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (ch === ' ' || ch === '\t') {
+      cls.push(prev === null ? false : prev)
+    } else {
+      prev = LATIN_CHAR.test(ch)
+      cls.push(prev)
+    }
+  }
+  // 行首连续空格的分类要跟它后面第一个实字符走
+  let head = 0
+  while (head < s.length && (s[head] === ' ' || s[head] === '\t')) head++
+  if (head && head < s.length) for (let i = 0; i < head; i++) cls[i] = cls[head]
+
+  const segs: Array<{ text: string; latin: boolean }> = []
+  for (let i = 0; i < s.length; i++) {
+    const last = segs[segs.length - 1]
+    if (last && last.latin === cls[i]) last.text += s[i]
+    else segs.push({ text: s[i], latin: cls[i] })
+  }
+  return segs
+}
+
+/**
  * w:rPr 子元素顺序（CT_RPr）：rStyle → rFonts → b → bCs → i → iCs → caps → smallCaps →
  * strike → dstrike → ... → color → spacing → w → kern → position → sz → szCs → ...
  * 顺序错了 Word 报"内容有问题"，所以这里按顺序 push，不做条件重排。
+ *
+ * @param latin `false` = 这一段是汉字/标点/符号 ⇒ `ascii`/`hAnsi` 也给中日韩字体；
+ *              `true` = 数字/字母 ⇒ 给西文字体；
+ *              不传（undefined）时沿用老口径（ascii/hAnsi = 西文字体）。
  */
-const rPrXml = (s: RunStyle): string => {
-  let out = `<w:rFonts w:ascii="${escAttr(s.latin)}" w:hAnsi="${escAttr(s.latin)}" w:eastAsia="${escAttr(
+const rPrXml = (s: RunStyle, latin?: boolean): string => {
+  const west = latin === false ? s.eastAsia : s.latin
+  let out = `<w:rFonts w:ascii="${escAttr(west)}" w:hAnsi="${escAttr(west)}" w:eastAsia="${escAttr(
     s.eastAsia
-  )}" w:cs="${escAttr(s.latin)}"/>`
+  )}" w:cs="${escAttr(west)}"/>`
   if (s.bold) out += '<w:b/><w:bCs/>'
   if (s.italic) out += '<w:i/><w:iCs/>'
   if (s.strike) out += '<w:strike/>'
@@ -252,20 +329,24 @@ const rPrXml = (s: RunStyle): string => {
 }
 
 /**
- * 一个 run。文本里残留的 \n 必须转成 <w:br/> ——
- * XML 文本节点里的裸换行会被 Word 当成空白吃掉，换行就消失了。
- * （正文里的 \n 已经在 splitLines 里换成了回车；走到这儿的只剩代码块与表格单元格的内容，
- *   它们都不是两端对齐，用软换行不会出问题）
+ * 一段文本 → **一个或多个** `<w:r>`（按脚本切，见 splitByScript）。
+ *
+ * ★ 返回值就是 `<w:r>` 的序列，调用方**不能**再在外面套 `<w:r>`。
+ * ★ 换行自带一个 run：原来把 `<w:br/>` 直接拼在 `<w:t>` 前面，
+ *   按脚本切开后 `<w:br/>` 就可能落在所有 `<w:r>` 之外 —— Word 会当它不存在，
+ *   换行就丢了（代码块全靠这个 <w:br/>）。
  */
 const runXml = (text: string, s: RunStyle): string => {
   const lines = String(text).split('\n')
-  let inner = ''
+  let out = ''
   for (let i = 0; i < lines.length; i++) {
-    if (i) inner += '<w:br/>'
-    if (lines[i]) inner += `<w:t xml:space="preserve">${esc(lines[i])}</w:t>`
+    if (i) out += `<w:r>${rPrXml(s, true)}<w:br/></w:r>`
+    const segs = splitByScript(lines[i])
+    for (let k = 0; k < segs.length; k++) {
+      out += `<w:r>${rPrXml(s, segs[k].latin)}<w:t xml:space="preserve">${esc(segs[k].text)}</w:t></w:r>`
+    }
   }
-  if (!inner) return ''
-  return `<w:r>${rPrXml(s)}${inner}</w:r>`
+  return out
 }
 
 /** 把一组行内片段转成 runs，样式按 run 自己的标记叠加基线样式 */
@@ -329,8 +410,11 @@ const paraXml = (content: string, o?: ParaOpts): string => {
   // 行距
   const line = p.line == null ? undefined : p.line
   let spacing = ''
-  if (p.beforeLines) spacing += ` w:beforeLines="${p.beforeLines}"`
-  if (p.afterLines) spacing += ` w:afterLines="${p.afterLines}"`
+  /* 段前/段后：**0 也要显式写出来**（`!= null` 而不是真值判断）——
+     规范要求「标题和副标题段前段后均为 0 行」，属性不写就等于"继承默认"，
+     看不出是"明确设成 0"还是"忘了设"；自检也没法断言。 */
+  if (p.beforeLines != null) spacing += ` w:beforeLines="${p.beforeLines}"`
+  if (p.afterLines != null) spacing += ` w:afterLines="${p.afterLines}"`
   if (line != null) {
     // line === 0 表示用 auto（下面给 360 = 1.5 倍）
     if (line > 0) spacing += ` w:line="${line}" w:lineRule="exact"`
@@ -369,7 +453,8 @@ const paraXml = (content: string, o?: ParaOpts): string => {
      两者都不是两端对齐。若日后有人放进"带 \n 又要求 both"的段落，Word 会重新
      把短行拉成「应　　急　　指　　挥　　部」—— 自检里的那条断言就是用来抓这个的。 */
   if (p.jc) pPr += `<w:jc w:val="${p.jc}"/>`
-  if (p.rPr) pPr += rPrXml(p.rPr)
+  // 段落标记的字体：按"符号用中日韩字体"的口径给（传 false），别留成西文字体
+  if (p.rPr) pPr += rPrXml(p.rPr, false)
 
   return `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${content}</w:p>`
 }
@@ -559,8 +644,8 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
       if (extra.ind) o.ind = extra.ind
       if (extra.jc) o.jc = extra.jc
       if (extra.line != null) o.line = extra.line
-      if (extra.beforeLines) o.beforeLines = extra.beforeLines
-      if (extra.afterLines) o.afterLines = extra.afterLines
+      if (extra.beforeLines != null) o.beforeLines = extra.beforeLines
+      if (extra.afterLines != null) o.afterLines = extra.afterLines
       if (extra.bottomBorder) o.bottomBorder = extra.bottomBorder
     }
     return paraXml(runsXml(parseInlineRuns(line), st, layout), o)
@@ -703,21 +788,22 @@ function documentXml(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pla
       latin: layout.latin,
       size: layout.title.size
     }
-    // 公文标题与正文之间空一行（afterLines=100 即 1 行）；
-    // 有副标题时段后留白交给副标题那一段，两段之间才不会空出两行
+    /* 规范：「标题和副标题段前段后均为 0 行」⇒ 公文预设下显式写 0（不是"不写属性"）。
+       普通文档预设保留原来的上方不留白、下方留一行。 */
     parts.push(
       paraXml(runXml(opts.title, titleStyle), {
         jc: 'center',
         ind: { firstLineChars: 0 },
         line: layout.line,
-        beforeLines: preset === 'gongwen' ? 50 : 0,
-        afterLines: opts.subtitle ? 0 : 50,
+        beforeLines: 0,
+        afterLines: preset === 'gongwen' ? 0 : opts.subtitle ? 0 : 50,
         rPr: titleStyle
       })
     )
   }
 
-  /* 副标题：紧排在大标题下面，居中、三号楷体（与「（一）」同一档字体，但字号随正文） */
+  /* 副标题：紧排在大标题下面，居中、三号楷体（与「（一）」同一档字体，但字号随正文）。
+     段前段后同样 0 行 —— 副标题要**贴着**标题，中间不能空出一行。 */
   if (opts.subtitle) {
     const subStyle: RunStyle = {
       eastAsia: preset === 'gongwen' ? layout.h2.font : '楷体',
@@ -729,7 +815,8 @@ function documentXml(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pla
         jc: 'center',
         ind: { firstLineChars: 0 },
         line: layout.line,
-        afterLines: 50,
+        beforeLines: 0,
+        afterLines: preset === 'gongwen' ? 0 : 50,
         rPr: subStyle
       })
     )
@@ -760,11 +847,16 @@ function documentXml(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pla
   if (!parts.length) parts.push(emptyParaXml(body, layout, layout.line))
 
   const showPageNumber = opts.pageNumber == null ? preset === 'gongwen' : !!opts.pageNumber
-  const footerRef = showPageNumber ? `<w:footerReference w:type="default" r:id="rId3"/>` : ''
+  /* 双面打印：奇数页（单页）页码居右、偶数页（双页）页码居左 ⇒ 两份页脚。
+     `default` 在开启奇偶页不同时代表**奇数页**，`even` 代表偶数页
+     （settings.xml 里的 <w:evenAndOddHeaders/> 是开关，两个必须配套）。 */
+  const footerRefs = showPageNumber
+    ? `<w:footerReference w:type="default" r:id="rId3"/><w:footerReference w:type="even" r:id="rId4"/>`
+    : ''
 
-  // CT_SectPr 顺序：footerReference → pgSz → pgMar → cols → docGrid
+  // CT_SectPr 顺序：footerReference* → pgSz → pgMar → cols → docGrid
   const sectPr =
-    `<w:sectPr>${footerRef}` +
+    `<w:sectPr>${footerRefs}` +
     `<w:pgSz w:w="${layout.page.w}" w:h="${layout.page.h}"/>` +
     `<w:pgMar w:top="${layout.margin.top}" w:right="${layout.margin.right}" w:bottom="${layout.margin.bottom}"` +
     ` w:left="${layout.margin.left}" w:header="${layout.margin.header}" w:footer="${layout.margin.footer}" w:gutter="0"/>` +
@@ -804,12 +896,20 @@ function stylesXml(layout: Layout): string {
   )
 }
 
-/** settings.xml：compat 里声明以 Word 2013 模式打开，避免 Word 用兼容排版重算行距 */
-function settingsXml(): string {
+/**
+ * settings.xml：compat 里声明以 Word 2013 模式打开，避免 Word 用兼容排版重算行距。
+ *
+ * ★ `w:evenAndOddHeaders` 是"奇偶页页脚不同"的总开关：不开它，Word 会对所有页
+ *   只用 `default` 那份页脚，`even` 那份会被完全忽略（页码就不是"单页右、双页左"了）。
+ *   位置放在 `defaultTabStop` 之后 —— CT_Settings 是一串**有序**的可选元素，
+ *   这个元素在 schema 里就排在 defaultTabStop 和 drawingGrid* 之间。
+ */
+function settingsXml(showPageNumber: boolean): string {
   return (
     `${XML_DECL}<w:settings ${W_NS}>` +
     `<w:zoom w:percent="100"/>` +
     `<w:defaultTabStop w:val="420"/>` +
+    (showPageNumber ? '<w:evenAndOddHeaders/>' : '') +
     `<w:characterSpacingControl w:val="compressPunctuation"/>` +
     `<w:compat><w:compatSetting w:name="compatibilityMode"` +
     ` w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>` +
@@ -819,24 +919,36 @@ function settingsXml(): string {
 }
 
 /**
- * 页脚页码：公文要求「— 1 —」样式（数字左右各一条一字线），四号宋体居中。
+ * 页脚页码。公文要求「— 1 —」（数字左右各一条一字线），本文件的口径：
+ *   - 字体：宋体四号（规范：「页码字体为宋体四号」）—— 整份页脚都用宋体，
+ *     不做"数字换 Times New Roman"的分流，这条是**针对页码的专门规定**，优先于通则；
+ *   - 行距：页码行固定值 15 磅；它上面那个空段落是页脚自身的行距，固定值 8 磅；
+ *   - 文本前后各空 1 字符（`w:ind` 的 leftChars/rightChars = 100）；
+ *   - 双面打印：奇数页（单页）居右、偶数页（双页）居左。
+ *
  * 页码用 PAGE 域，Word 会自动算 —— 但 fldSimple 里必须放一个占位 run，
  * 否则某些解析器（WPS）会显示成空。
+ *
+ * @param jc 奇偶页的对齐方式（'right' = 单页、'left' = 双页）
  */
-function footerXml(layout: Layout): string {
+function footerXml(layout: Layout, jc: 'left' | 'right'): string {
   const st: RunStyle = { eastAsia: '宋体', latin: '宋体', size: layout.pageNumberSize }
-  const rpr = rPrXml(st)
+  const rpr = rPrXml(st, false)
   const dash = (t: string) => `<w:r>${rpr}<w:t xml:space="preserve">${t}</w:t></w:r>`
-  return (
-    `${XML_DECL}<w:ftr ${W_NS}>` +
-    paraXml(
-      dash('— ') +
-        `<w:fldSimple w:instr=" PAGE "><w:r>${rpr}<w:t>1</w:t></w:r></w:fldSimple>` +
-        dash(' —'),
-      { jc: 'center', ind: { firstLineChars: 0 }, line: -1, rPr: st }
-    ) +
-    `</w:ftr>`
+  // 页脚第一行：只用来摆纵向位置（固定行距 8 磅），看不见
+  const spacer = paraXml('', { ind: { firstLineChars: 0 }, line: layout.footerLine, rPr: st })
+  const number = paraXml(
+    dash('— ') +
+      `<w:fldSimple w:instr=" PAGE "><w:r>${rpr}<w:t>1</w:t></w:r></w:fldSimple>` +
+      dash(' —'),
+    {
+      ind: { leftChars: layout.pageNumberIndent, rightChars: layout.pageNumberIndent },
+      jc,
+      line: layout.pageNumberLine,
+      rPr: st
+    }
   )
+  return `${XML_DECL}<w:ftr ${W_NS}>${spacer}${number}</w:ftr>`
 }
 
 /* ==================================================================== *
@@ -866,10 +978,10 @@ export function buildDocx(blocks: MdBlock[], opts: DocxOptions): Uint8Array {
     { part: '/word/settings.xml', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml' }
   ]
   if (showPageNumber) {
-    overrides.push({
-      part: '/word/footer1.xml',
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml'
-    })
+    /* 双面打印要两份页脚：footer1 = 奇数页（default）、footer2 = 偶数页（even） */
+    const footerType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml'
+    overrides.push({ part: '/word/footer1.xml', type: footerType })
+    overrides.push({ part: '/word/footer2.xml', type: footerType })
   }
   overrides.push({ part: '/docProps/core.xml', type: 'application/vnd.openxmlformats-package.core-properties+xml' })
   overrides.push({
@@ -890,11 +1002,9 @@ export function buildDocx(blocks: MdBlock[], opts: DocxOptions): Uint8Array {
     }
   ]
   if (showPageNumber) {
-    docRels.push({
-      id: 'rId3',
-      type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer',
-      target: 'footer1.xml'
-    })
+    const footerType = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer'
+    docRels.push({ id: 'rId3', type: footerType, target: 'footer1.xml' })
+    docRels.push({ id: 'rId4', type: footerType, target: 'footer2.xml' })
   }
 
   const entries: ZipEntry[] = [
@@ -905,9 +1015,13 @@ export function buildDocx(blocks: MdBlock[], opts: DocxOptions): Uint8Array {
     { name: 'word/document.xml', data: documentXml(blocks, layout, preset, opts) },
     { name: 'word/_rels/document.xml.rels', data: relsXml(docRels) },
     { name: 'word/styles.xml', data: stylesXml(layout) },
-    { name: 'word/settings.xml', data: settingsXml() }
+    { name: 'word/settings.xml', data: settingsXml(showPageNumber) }
   ]
-  if (showPageNumber) entries.push({ name: 'word/footer1.xml', data: footerXml(layout) })
+  if (showPageNumber) {
+    // rId3 = 奇数页（单页，居右）、rId4 = 偶数页（双页，居左）
+    entries.push({ name: 'word/footer1.xml', data: footerXml(layout, 'right') })
+    entries.push({ name: 'word/footer2.xml', data: footerXml(layout, 'left') })
+  }
 
   return buildZip(entries, when)
 }

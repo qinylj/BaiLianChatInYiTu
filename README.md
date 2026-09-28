@@ -38,8 +38,14 @@
   可选 `.txt`（去语法符号，带 BOM，Windows 记事本不乱码）或 `.md`（源码留档）
 - **单条回答可一键导出 Word / TXT / Markdown 原文**（按钮在「重答」旁边）：
   - **Word 默认按党政机关公文格式排版**：页边距上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm，
-    正文方正仿宋_GBK 三号，**行距固定值 29.7 磅**（版心 159 × 233 mm，一页正好排 22 行），
-    首行缩进 2 字符，标题方正小标宋_GBK 二号居中，页脚「— 1 —」页码；
+    **页眉 1.5 cm、页脚 2.6 cm**，正文方正仿宋_GBK 三号，**行距固定值 29.7 磅**
+    （版心 159 × 233 mm，一页正好排 22 行），首行缩进 2 字符，
+    标题方正小标宋_GBK 二号居中、**标题与副标题段前段后均为 0 行**；
+    页脚页码「— 1 —」宋体四号、行距固定值 15 磅、文本前后各空 1 字符，
+    并按**双面打印**排 —— 单页（奇数页）居右、双页（偶数页）居左（两份页脚 + 奇偶页开关）；
+    **字体按字符分两路：只有数字和字母用 Times New Roman，其余（汉字、标点、符号）
+    一律用该层次的字体或正文字体** —— `—`「“”」「（」「%」这类落在西文码位上的符号
+    不会跑到 Times New Roman 上去（页码是规范里的专门规定，整行宋体，不参与这条分流）；
     正文的**层次按行首序数**自动换字体 ——「一、」方正黑体_GBK、「（一）」方正楷体_GBK、
     「1.」与「（1）」方正仿宋_GBK（与正文同），序数可以越级使用；
     标题下面紧跟的、整行被圆括号包住的一块（如「（2025-2027年）」）当作**副标题**，
@@ -129,9 +135,9 @@ BaiLianChatInYiTu/
 │   ├── pack.cjs                # 把 dist 打成带版本的交付 zip（零依赖 zip 写入）
 │   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"+ 空格/emoji 清理（108 项，无需浏览器）
 │   ├── verify-copy-clipboard.cjs  # 真浏览器自检：剪贴板里到底是渲染后内容还是 Markdown 原文
-│   ├── verify-office-export.cjs   # 导出自检（146 项：行内交叉一致性 / 排版回归 / 层次序数 / 标题块 / 版面 / zip / 编排）
-│   ├── verify_ooxml.py            # Python 标准库独立复验产物（142 项：zipfile 验 CRC、ElementTree 验 XML）
-│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（55 项）
+│   ├── verify-office-export.cjs   # 导出自检（185 项：行内交叉一致性 / 排版回归 / 层次序数 / 标题块 / 版面 / 页眉页脚与页码 / 字体分流 / zip / 编排）
+│   ├── verify_ooxml.py            # Python 标准库独立复验产物（179 项：zipfile 验 CRC、ElementTree 验 XML）
+│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（68 项）
 └── src/
     ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（16 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
@@ -223,8 +229,8 @@ npm run pack         # 已编译过，只想重新打 zip
 
 ```bash
 node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本" + 空格/emoji 清理，108 项，纯 Node
-node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / 层次序数 / 标题块 / 版面 / TXT / MD，146 项 + Python 交叉验证 142 项
-node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，55 项
+node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / 层次序数 / 标题块 / 版面 / 页眉页脚与页码 / 字体分流，185 项 + Python 交叉验证 179 项
+node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，68 项
 node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 9 项 / CHROME_UI=1 共 20 项）
 ```
 

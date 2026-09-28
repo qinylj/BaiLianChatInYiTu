@@ -44,6 +44,10 @@
     「1.」与「（1）」方正仿宋_GBK（与正文同），序数可以越级使用；
     标题下面紧跟的、整行被圆括号包住的一块（如「（2025-2027年）」）当作**副标题**，
     用方正楷体_GBK 三号居中排在标题正下方；
+    公式里只有一条缩进口径：**所有段落（标题、正文、列表项、引用）都是首行缩进 2 字符** ——
+    不做悬挂缩进、也不用"文本之前"的左缩进；无序列表**不带项目符号**（公文靠 `一、`/`（一）`/`1.`
+    分层次，不靠 `·`/`-`），有序列表保留 `1.` 但序号后不留空格；Markdown 表格后面的那个空行
+    不会落成一个空段落（否则 Word 里就是可见的一整行空白）；
     Markdown 表格落成 **Word 真表格**（表头跨页自动重复、列宽按内容分配、
     总宽正好铺满版心，不会因为某列内容长就把版心撑歪）。也可切换成「普通文档」预设
   - **标题块按原文顺序落位**：模型常先写一句引语（「以下是为…：」）再上正文标题，
@@ -123,11 +127,11 @@ BaiLianChatInYiTu/
 ├── tools/
 │   ├── bump-version.cjs        # 版本号命令行：查看 / 自增 / 指定
 │   ├── pack.cjs                # 把 dist 打成带版本的交付 zip（零依赖 zip 写入）
-│   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"+ 空格/emoji 清理（101 项，无需浏览器）
+│   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"+ 空格/emoji 清理（108 项，无需浏览器）
 │   ├── verify-copy-clipboard.cjs  # 真浏览器自检：剪贴板里到底是渲染后内容还是 Markdown 原文
-│   ├── verify-office-export.cjs   # 导出自检（127 项：行内交叉一致性 / 排版回归 / 层次序数 / 标题块 / zip / 编排）
-│   ├── verify_ooxml.py            # Python 标准库独立复验产物（124 项：zipfile 验 CRC、ElementTree 验 XML）
-│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（50 项）
+│   ├── verify-office-export.cjs   # 导出自检（146 项：行内交叉一致性 / 排版回归 / 层次序数 / 标题块 / 版面 / zip / 编排）
+│   ├── verify_ooxml.py            # Python 标准库独立复验产物（142 项：zipfile 验 CRC、ElementTree 验 XML）
+│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（55 项）
 └── src/
     ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（16 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
@@ -218,9 +222,9 @@ npm run pack         # 已编译过，只想重新打 zip
 把 TS 现场转成可执行代码），也不需要 webpack dev server：
 
 ```bash
-node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本" + 空格/emoji 清理，101 项，纯 Node
-node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / 层次序数 / 标题块 / TXT / MD，127 项 + Python 交叉验证 124 项
-node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，50 项
+node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本" + 空格/emoji 清理，108 项，纯 Node
+node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / 层次序数 / 标题块 / 版面 / TXT / MD，146 项 + Python 交叉验证 142 项
+node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，55 项
 node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 9 项 / CHROME_UI=1 共 20 项）
 ```
 

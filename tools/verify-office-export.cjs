@@ -384,10 +384,16 @@ function groupBlocks(md, exporter) {
   const listParas = parasOf(listXml)
   check('列表续行拆成独立段落（标题 + 首行 + 续行 + 第二项 = 4 段）',
     listParas.length === 4, listParas.map(textOf))
-  check('序号只悬挂在两条列表项的首行段落上（续行给左缩进，不悬挂）',
-    listParas.filter(p => /w:hangingChars="/.test(p)).length === 2 &&
-      /w:leftChars="200"/.test(listParas[2]) && !/w:hangingChars="/.test(listParas[2]),
-    listParas.map(p => (p.match(/w:hangingChars="\d+"/) || ['(无悬挂)'])[0]))
+  /* ★ 公文不用悬挂缩进：列表项的首行与续行都是"首行缩进 2 字符"，
+     谁也不许再出现左缩进 / 悬挂缩进 —— 悬挂会把首行顶到版心最左边，
+     看上去就是"行首多出一块空白、续行反而缩进"（用户截图圈的就是它）。 */
+  check('列表项不悬挂：首行与续行一律"首行缩进 2 字符"，没有左缩进/悬挂缩进',
+    listParas.slice(1).every(p => /w:firstLineChars="200"/.test(p)) &&
+      !/w:leftChars=/.test(listXml) && !/w:hangingChars=/.test(listXml),
+    listParas.map(p => (p.match(/<w:ind[^>]*>/) || ['(无 ind)'])[0]))
+  check('有序列表的序号后不留空格（`1.清点…` 而不是 `1. 清点…`）',
+    textOf(listParas[1]).indexOf('1.先期处置') === 0 && textOf(listParas[3]).indexOf('2.报告与响应') === 0,
+    listParas.map(textOf))
   check('列表（含续行）全部两端对齐',
     listParas.slice(1).every(p => /<w:jc w:val="both"\/>/.test(p)), listParas.map(jcOf))
 
@@ -661,6 +667,115 @@ function groupFrame(docx, exporter) {
   check('HTML 导出也清掉 emoji', html.indexOf('✅') < 0 && html.indexOf('政务服务：区级事项') >= 0)
 }
 
+/* --------------------- 【2.9】版面：不悬挂 / 不带符号 / 表后不留空行 --------------------- */
+
+/**
+ * 用户拿导出稿圈出来的三处：列表行首还有空格、表格后面多出一整行空白、
+ * 一二三四级标题和正文都不该有悬挂缩进。三处的成因都在我们自己身上：
+ *   - 无序列表的标记是我们拼的 `'· '`（点 + **空格**）；
+ *   - 引用块里的 `- ` 是"原样透传"进来的（`-` 不是汉字，清空格那条规则管不到）；
+ *   - 表后的空段落是我们自己 push 的。
+ * 样本要把「无序列表 / 引用里的列表 / 有序列表 / 表格紧跟正文」四种形态都摆进去。
+ */
+const LAYOUT_SAMPLE = [
+  '# 某某工作方案',
+  '',
+  '（2025-2027年）',
+  '',
+  '一、总体要求',
+  '',
+  '- 民生直达：整合医保、养老、补贴等政策',
+  '- 江城健康云：打通区内 8 家医院数据',
+  '',
+  '| 领域 | 重点项目 |',
+  '| --- | --- |',
+  '| 智造强区 | 川维化工平台 |',
+  '',
+  '（三）惠民：数字服务普惠',
+  '',
+  '> **附：标杆场景**',
+  '> - **长寿湖渔政AI预警**：响应时间缩短至 5 分钟',
+  '> - **社区养老“一键呼”**：联动网格员',
+  '',
+  '1. 先期处置：清点应急物资',
+  ''
+].join('\n')
+
+function groupLayout(exporter) {
+  section('【2.9】版面：不悬挂缩进 / 列表不带项目符号 / 表后不留空行')
+
+  const xml = readZipEntry(
+    Buffer.from(exporter.buildOfficeExport(LAYOUT_SAMPLE, {
+      preset: 'gongwen',
+      when: new Date(2026, 8, 29, 0, 30)
+    }).bytes),
+    'word/document.xml'
+  ).toString('utf8')
+
+  /* 按文档顺序切开 body：表格是**一整块**，单元格里的 <w:p> 不再混进来，
+     这样"表后紧跟的那一段"才有确定含义。 */
+  const bodyXml = xml.slice(xml.indexOf('<w:body>') + 8, xml.indexOf('<w:sectPr'))
+  const tokens = bodyXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>|<w:p>[\s\S]*?<\/w:p>/g) || []
+  const bodyParas = tokens.filter(t => t.startsWith('<w:p>'))
+  const texts = bodyParas.map(textOf)
+  const plain = texts.map(t => t.trim())
+
+  /* ---------- 一、表格后面不留空行 ---------- */
+  const iTbl = tokens.findIndex(t => t.startsWith('<w:tbl>'))
+  const afterTbl = iTbl >= 0 ? tokens[iTbl + 1] : null
+  check('样本里确实有表格（后面还跟着正文，才能验"表后不留空行"）',
+    iTbl >= 0 && tokens.length > iTbl + 1, { blocks: tokens.length, iTbl: iTbl })
+  check('表格后面不留空行：紧跟的下一段直接就是正文，不是空段落',
+    !!afterTbl && textOf(afterTbl).trim().length > 0,
+    afterTbl ? JSON.stringify(textOf(afterTbl)) : '(表格后没有块)')
+  check('全篇没有空段落（表后那种一整行空白）',
+    texts.every(t => t.trim().length > 0), texts)
+
+  /* ---------- 二、不悬挂缩进：一律"首行缩进 2 字符" ---------- */
+  check('全篇没有悬挂缩进（w:hangingChars / w:hanging）',
+    !/w:hangingChars=/.test(xml) && !/<w:hanging\b/.test(xml))
+  check('全篇没有左缩进（w:leftChars —— 就是"文本之前"空 2 字符，用户明确不要）',
+    !/w:leftChars=/.test(xml))
+  check('全篇没有右缩进（w:rightChars）', !/w:rightChars=/.test(xml))
+  const notCover = bodyParas.filter(p => textOf(p).trim() && !/<w:jc w:val="center"/.test(p))
+  check('所有段落（标题/正文/列表/引用）一律 firstLineChars=200',
+    notCover.length > 0 && notCover.every(p => /w:firstLineChars="200"/.test(p)),
+    notCover.map(p => (p.match(/w:firstLineChars="\d+"/) || ['(无)'])[0]))
+  check('封面居中段不缩进（居中的标题/副标题加首行缩进会歪）',
+    bodyParas.filter(p => /<w:jc w:val="center"/.test(p)).every(p => /w:firstLineChars="0"/.test(p)),
+    bodyParas.filter(p => /<w:jc w:val="center"/.test(p)).map(textOf))
+
+  /* ---------- 三、列表不带项目符号 ---------- */
+  check('无序列表不生成项目符号：`- 民生直达：…` → `民生直达：…`（没有「· 」也没有「- 」）',
+    plain.indexOf('民生直达：整合医保、养老、补贴等政策') >= 0 &&
+      plain.indexOf('江城健康云：打通区内 8 家医院数据') >= 0,
+    plain.slice(0, 10))
+  check('引用块里的「- 」也被剥掉（引用是原样透传的，得单独收拾）',
+    plain.some(t => t.indexOf('长寿湖渔政AI预警：响应时间缩短至 5 分钟') === 0) &&
+      plain.some(t => t.indexOf('社区养老“一键呼”：联动网格员') === 0),
+    plain.filter(t => t.indexOf('长寿湖') >= 0 || t.indexOf('社区养老') >= 0))
+  check('整篇没有任何行首项目符号（· / - / * / •）',
+    !bodyParas.some(p => /^\s*[·\-*+•‣◦▪∙]/.test(textOf(p))), texts.slice(0, 14))
+  check('有序列表保留序号、且序号后不留空格（`1.先期处置：…`）',
+    plain.indexOf('1.先期处置：清点应急物资') >= 0, plain)
+
+  /* ---------- 四、空格：连续空格 / 全角空格 / nbsp 都不许留在正文里 ---------- */
+  check('正文里没有连续空格 / 全角空格 / 不换行空格（nbsp）',
+    !bodyParas.some(p => / {2,}|\u3000|\u00a0/.test(textOf(p))),
+    bodyParas.map(textOf).filter(t => / {2,}|\u3000|\u00a0/.test(t)))
+  check('中英文之间的单个空格没有被误删（`缩短至 5 分钟` 仍在）',
+    plain.some(t => t.indexOf('响应时间缩短至 5 分钟') > 0))
+
+  /* 表格是最后一整块时也不能崩（正文不能以表格收尾就没段落了） */
+  const tblOnly = exporter.buildOfficeExport('| a | b |\n| --- | --- |\n| 1 | 2 |', {
+    preset: 'gongwen',
+    when: new Date(2026, 8, 29, 0, 30)
+  })
+  const tblOnlyXml = readZipEntry(Buffer.from(tblOnly.bytes), 'word/document.xml').toString('utf8')
+  check('整篇只有表格也能生成（表后不留空行后仍要保证结构完整）',
+    tblOnlyXml.indexOf('</w:tbl>') > 0 && tblOnlyXml.indexOf('<w:sectPr') > 0)
+}
+
 /* ------------------------------ 【3】zip 自解析 ------------------------------ */
 
 /** 独立实现一个最小 zip 解析器：从 EOCD 读中央目录，再按偏移取本地项 */
@@ -860,6 +975,11 @@ function groupArtifacts(exporter) {
       preset: 'gongwen',
       meta: ['导出时间：2026/9/28 23:24:24'],
       when: new Date(2026, 8, 28, 23, 24)
+    })],
+    // 给 Python 侧验版面：不悬挂缩进 / 列表无符号 / 表后不留空行
+    ['case-layout.docx', exporter.buildOfficeExport(LAYOUT_SAMPLE, {
+      preset: 'gongwen',
+      when: new Date(2026, 8, 29, 0, 30)
     })]
   ]
 
@@ -915,6 +1035,7 @@ async function main() {
   groupBlocks(md, exporter)
   groupOrdinal(docx, exporter)
   groupFrame(docx, exporter)
+  groupLayout(exporter)
   groupZip(zip)
   groupArtifacts(exporter)
   await groupPython()

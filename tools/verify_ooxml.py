@@ -598,6 +598,101 @@ def check_frame(path):
        sorted(used))
 
 
+def check_page_layout(path):
+    """版面三件事：不悬挂缩进 / 列表无项目符号 / 表后不留空行。
+
+    用 ElementTree 从 body 的**子节点顺序**独立复算 —— 不依赖 JS 侧那套正则切分，
+    这样才能证明"表后紧跟的那一段"确实是正文而不是空段落。
+    """
+    section('【I】docx —— 版面：不悬挂缩进 / 列表无项目符号 / 表后不留空行')
+    parts = load(path)
+    if not parts:
+        return
+    check_zip_hygiene(parts, 'docx-layout')
+    doc = parse(parts, 'word/document.xml')
+    if doc is None:
+        return
+    body = doc.find(W + 'body')
+    if body is None:
+        ck('有 body 节点', False)
+        return
+
+    blocks = [el for el in list(body) if el.tag in (W + 'p', W + 'tbl')]
+    kinds = [el.tag.split('}')[-1] for el in blocks]
+    ck('样本里表格后面还跟着正文（否则验不了"表后不留空行"）',
+       'tbl' in kinds and kinds[-1] != 'tbl', kinds)
+
+    def para_text(el):
+        return all_text(el, W + 't')
+
+    def first_line(el):
+        ppr = el.find(W + 'pPr')
+        ind = ppr.find(W + 'ind') if ppr is not None else None
+        return ind.get(W + 'firstLineChars') if ind is not None else None
+
+    def jc_of(el):
+        ppr = el.find(W + 'pPr')
+        j = ppr.find(W + 'jc') if ppr is not None else None
+        return j.get(W + 'val') if j is not None else None
+
+    # --- 表后不留空行 ---
+    bad_after = []
+    for i, el in enumerate(blocks):
+        if el.tag != W + 'tbl':
+            continue
+        nxt = blocks[i + 1] if i + 1 < len(blocks) else None
+        if nxt is not None and nxt.tag == W + 'p' and not para_text(nxt).strip():
+            bad_after.append(kinds[i + 1])
+    ck('表格后面没有空段落（表后那一整行空白不见了）', not bad_after, bad_after)
+
+    body_paras = [el for el in blocks if el.tag == W + 'p']
+    empty = [i for i, el in enumerate(body_paras) if not para_text(el).strip()]
+    ck('全篇没有空段落', not empty, empty)
+
+    # --- 不悬挂缩进 ---
+    inds = list(doc.iter(W + 'ind'))
+
+    def used(name):
+        return sorted({i.get(W + name) for i in inds
+                       if i.get(W + name) not in (None, '0')})
+
+    ck('全篇没有左缩进（w:leftChars —— "文本之前"空 2 字符）', not used('leftChars'), used('leftChars'))
+    ck('全篇没有悬挂缩进（w:hangingChars）', not used('hangingChars'), used('hangingChars'))
+    ck('全篇没有右缩进（w:rightChars）', not used('rightChars'), used('rightChars'))
+
+    not_cover = [el for el in body_paras
+                 if para_text(el).strip() and jc_of(el) != 'center']
+    ck('所有段落（标题/正文/列表/引用）都是 firstLineChars=200',
+       bool(not_cover) and all(first_line(el) == '200' for el in not_cover),
+       [(para_text(el)[:14], first_line(el)) for el in not_cover])
+    cover = [el for el in body_paras if jc_of(el) == 'center']
+    ck('封面居中段不缩进（firstLineChars=0，居中段落加首行缩进会歪）',
+       bool(cover) and all(first_line(el) == '0' for el in cover),
+       [(para_text(el)[:14], first_line(el)) for el in cover])
+
+    # --- 列表不带项目符号 ---
+    texts = [para_text(el) for el in body_paras]
+    bullets = [t for t in texts if re.match(r'^\s*[·\-*+•‣◦▪∙]', t)]
+    ck('没有任何段落以项目符号开头（· / - / * / •）', not bullets, bullets[:4])
+    ck('无序列表的内容直接就是正文（`- 民生直达：…` → `民生直达：…`）',
+       '民生直达：整合医保、养老、补贴等政策' in texts,
+       [t for t in texts if '民生直达' in t])
+    ck('引用块里的「- 」也被剥掉（引用是原样透传的）',
+       any(t.startswith('长寿湖渔政AI预警') for t in texts)
+       and any(t.startswith('社区养老“一键呼”') for t in texts),
+       [t for t in texts if '长寿湖' in t or '社区养老' in t])
+    ck('有序列表保留序号、序号后不留空格（`1.先期处置：清点应急物资`）',
+       '1.先期处置：清点应急物资' in texts,
+       [t for t in texts if re.match(r'^[0-9]', t)])
+
+    # --- 空格 ---
+    runs = [el.text or '' for el in doc.iter(W + 't')]
+    bad_space = [s for s in runs if '  ' in s or '\u3000' in s or '\u00a0' in s]
+    ck('正文里没有连续空格 / 全角空格 / 不换行空格（nbsp）', not bad_space, bad_space[:4])
+    ck('中英文之间的单个空格没被误删（`缩短至 5 分钟` 仍在）',
+       any('响应时间缩短至 5 分钟' in t for t in texts))
+
+
 def main():
     print('=' * 68)
     print('导出产物校验（Python 标准库独立实现：zipfile 验 CRC，ElementTree 验 XML）')
@@ -610,6 +705,7 @@ def main():
     check_layout_regressions(p('case-gongwen.docx'), p('case-softbreak.docx'))
     check_ordinal(p('case-ordinal.docx'))
     check_frame(p('case-frame.docx'))
+    check_page_layout(p('case-layout.docx'))
     check_txt(p('case-content.txt'))
     check_md(p('case-content.md'))
 

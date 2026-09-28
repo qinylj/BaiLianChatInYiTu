@@ -73,7 +73,15 @@ const SAMPLE = [
   '| 姓名 | 危险特性 | 处置方式 |',
   '| --- | --- | --- |',
   '| 液氯 | 剧毒、强刺激性 | 碱液中和 |',
-  '| 硫酸 | 强腐蚀性 | 大量水稀释 |'
+  '| 硫酸 | 强腐蚀性 | 大量水稀释 |',
+  '',
+  '附：报送要求',
+  '',
+  '> **附：标杆场景**',
+  '> - **先期处置**：清点应急物资，落实“一人一表”。',
+  '> - **信息报送**：2 小时内报属地应急管理部门。',
+  '',
+  '本预案自发布之日起施行，由安全生产管理部门负责解释。'
 ].join('\n')
 
 /* ---------- 1. 现场编译 TS，装进页面的迷你模块系统 ---------- */
@@ -514,6 +522,37 @@ async function main() {
         check('这三段都是两端对齐（字距不会被拉开）',
           shortParas.length === 3 && shortParas.every(p => /<w:jc w:val="both"\/>/.test(p)),
           shortParas.map(p => (p.match(/<w:jc [^/]*\/>/) || ['(无)'])[0]))
+
+        /* ★ 本轮三处：不悬挂缩进 / 列表不带项目符号 / 表后不留空行（都在落盘文件上验） */
+        /* 只看 body 级段落：表格整块先挖掉，否则单元格里的 <w:p> 会混进来 */
+        const noTblDoc = doc.replace(/<w:tbl>[\s\S]*?<\/w:tbl>/g, '')
+        const bodyParaTexts = noTblDoc.split('<w:p>').slice(1).map(paraText)
+        check('全篇没有悬挂缩进，也没有左缩进/右缩进（不是"文本之前"空 2 字符）',
+          !/w:hangingChars=/.test(doc) && !/w:leftChars=/.test(doc) && !/w:rightChars=/.test(doc),
+          (doc.match(/<w:ind[^>]*>/g) || []).slice(0, 4))
+        check('无序列表不生成项目符号（`- 液氯…` 落盘后就是正文，没有「· 」也没有「- 」）',
+          bodyParaTexts.indexOf('液氯、硫酸等剧毒强腐蚀品的储存环节') >= 0 &&
+            !bodyParaTexts.some(t => /^\s*[·\-*+•]/.test(t)),
+          bodyParaTexts.filter(t => /液氯|储存环节/.test(t)))
+        check('引用块里的「- 」也被剥掉（落盘后是「先期处置：清点应急物资…」）',
+          bodyParaTexts.indexOf('先期处置：清点应急物资，落实“一人一表”。') >= 0,
+          bodyParaTexts.filter(t => /先期处置|信息报送/.test(t)))
+        check('表格后面不留空行（表后紧跟的一段是正文，不是空段落）',
+          (() => {
+            const m = /<\/w:tbl>\s*(<w:p>[\s\S]*?<\/w:p>)/.exec(doc)
+            return !!m && paraText(m[1]).trim().length > 0
+          })(),
+          (() => {
+            const m = /<\/w:tbl>\s*(<w:p>[\s\S]*?<\/w:p>)/.exec(doc)
+            return m ? JSON.stringify(paraText(m[1])) : '(表后没有段落)'
+          })())
+        check('正文段落一律"首行缩进 2 字符"（封面居中段与表格单元格除外）',
+          noTblDoc.split('<w:p>').slice(1)
+            .filter(p => paraText(p).trim() && !/<w:jc w:val="center"/.test(p))
+            .every(p => /w:firstLineChars="200"/.test(p)),
+          noTblDoc.split('<w:p>').slice(1)
+            .filter(p => paraText(p).trim() && !/<w:jc w:val="center"/.test(p))
+            .map(p => (p.match(/w:firstLineChars="\d+"/) || ['(无)'])[0]))
       }
       const py = await pythonVerify(p)
       check('Python zipfile 校验落盘文件通过（CRC + XML 独立验证）', py.ok, py.out || py.err)
@@ -550,9 +589,13 @@ async function main() {
         JSON.stringify(text.slice(0, 40)))
       check('没有残留 Markdown 语法符号与分割线横杠',
         text.indexOf('**') < 0 && text.indexOf('----------') < 0, JSON.stringify(text.slice(0, 160)))
-      check('多余空格也被清掉（TXT 与 Word 同一套口径）',
-        text.indexOf('总指挥：企业主要负责人') >= 0 && !/  /.test(text),
-        JSON.stringify((text.match(/.*总指挥.*/g) || []).slice(0, 2)))
+      check('多余空格也被清掉（TXT 与 Word 同一套口径，连 nbsp 一起）',
+        text.indexOf('总指挥：企业主要负责人') >= 0 && !/  /.test(text) && text.indexOf('\u00a0') < 0,
+        JSON.stringify({
+          hit: text.indexOf('总指挥：企业主要负责人') >= 0,
+          dbl: /  /.test(text),
+          nbsp: text.indexOf('\u00a0') >= 0
+        }))
       check('emoji 同样不进 TXT（✅ 已清掉）', text.indexOf('✅') < 0,
         JSON.stringify((text.match(/.*一级响应.*/g) || []).slice(0, 1)))
       check('表格被拍平成可读文本（表头与单元格都在）',

@@ -17,6 +17,16 @@
  *   模型爱把这些写成普通段落（甚至和正文挤在同一个 Markdown 段落里），
  *   所以检测放在"块 → 段落"的**每一行**上，见 ordinalLevel()。
  *
+ * ★ 缩进只有一条口径：**首行缩进 2 字符**（firstLineChars=200），而且**只此一条** ——
+ *     不回退到"左缩进"、也不做悬挂。用户原话：「一二三四级标题和正文都不需要悬挂缩进，
+ *     都是首行缩进 2 个字符就行了（不是文本之前空 2 字符）」。
+ *     - 悬挂缩进会把首行顶到版心最左边、续行反而缩进 2 字，看上去就是"行首多一块空白"；
+ *     - 左缩进（Word 里的"文本之前"）会把整段推右，同样不是公文的样子；
+ *     - 列表项也照这一条走，**不生成项目符号**（公文不用「·」「-」，层次靠序数）；
+ *       有序列表保留 `1.`，但序号后不留空格（`1.内容`）。
+ *   ★ 因此全篇只有三类段落例外：封面居中块（标题/副标题/meta，缩进 0）、
+ *     表格单元格（缩进 0）、代码块（保持左对齐，但仍给首行 2 字符）。
+ *
  * ★ 标题块由三段拼成，而且**不一定排在文档第一行**：
  *     lead（标题之前的正文块，模型写的"以下是为…："）
  *     → 标题（二号小标宋居中）
@@ -26,6 +36,9 @@
  *   后面去了（用户反馈「顺序颠倒了」「这段话应该是在标题上面」）。现在标题留在它原本
  *   的位置，引语原位排在上面 —— 位置由调用方算好传进来（见 exporter.ts）。
  *
+ * ★ 表后不留空段落：Markdown 表格后面本来就有个空行（表格语法要求），早先这里又补了
+ *   一个空段，Word 里就是肉眼可见的一整行空白（用户截图圈的就是它）。表格自带边框，
+ *   和下文自然分开，不需要空行隔开。
  * ★ 两个"看起来能跑、打开就露馅"的排版坑，都在这里被刻意规避：
  *   1. 手动换行符（Shift+Enter，↓）不能被两端对齐：模型很爱写"一句一行"的短句块，
  *      Markdown 里它们属于**同一个**段落（`para.text` 里的 \n）。若照直转成同一个
@@ -507,6 +520,27 @@ const splitLines = (text: string): string[] => {
   return lines
 }
 
+/**
+ * 去掉行首残留的列表项目符号（`- `、`* `、`+ `、`· `、`• ` 以及 `-- `）。
+ *
+ * 公文正文**不用项目符号**：层次靠行首序数（`一、`/`（一）`/`1.`/`（1）`）和字体区分。
+ * 但列表项有两种来路，符号的处理方式不一样：
+ *   - 顶层列表项：块解析已经把符号摘掉、只把内容交给 item 块，我们**不再补符号**；
+ *   - 引用块（`>`）里的列表：整行是"原样透传"进来的，`> - **长寿湖渔政AI预警**：…`
+ *     里的 `- ` 会跟着内容一起进正文；而且 `-` 不是汉字，`squeezeSpaces` 只清"中文旁边"
+ *     的空格，管不到它 —— 于是正文里就留下「横杠 + 一个空格」。
+ *
+ * ★ 只认「符号 + 空白」：`-10℃`、`2025-2027年` 不是列表，不能被误剥。
+ * ★ 剥完什么都不剩时原样返回 —— 别把一条只有符号的行变成空段落。
+ */
+const stripListMark = (line: string): string => {
+  const s = String(line == null ? '' : line)
+  const m = /^[^\S\n]*(?:[-*+•‣◦▪∙][^\S\n]+|·[^\S\n]*|[-–—]{2,}[^\S\n]*)/.exec(s)
+  if (!m) return s
+  const rest = s.slice(m[0].length)
+  return rest.trim() ? rest : s
+}
+
 function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'plain'): string {
   const body: RunStyle = {
     eastAsia: layout.body.font,
@@ -576,71 +610,53 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
     }
 
     if (b.type === 'item') {
-      // 列表：公文里俗称"层次序数"，这里保持和渲染页一致的层级观感 ——
-      // 每级左缩进 2 字符，并让序号悬挂在文字外侧，长条目换行后与首行对齐
-      const left = 200 + b.level * 200
-      /* ★ 序号后面**不留空格**：公文的第三层写作「1.内容」，序号与文字之间没有空格。
-         模型写的 `1. 算力网络` 里那个空格是 Markdown 列表语法的分隔符，
-         不是内容的一部分；留在这里导出就是"多余的空格"（用户截图里圈的就是它）。 */
-      const marker = b.ordered ? `${b.index}.` : '· '
+      /* 列表 → 公文正文段落：**不加项目符号、不做悬挂缩进**。
+         ★ 不加符号：公文正文不用「·」「-」这类项目符号，层次靠行首序数
+           （一、/（一）/1./（1））和字体区分。模型爱写 `- **民生直达**：…`，
+           渲染成「· 民生直达：…」就等于凭空多出一枚符号 + 一个空格
+           （用户截图里圈住的那个灰点就是它）。
+         ★ 有序列表保留序号，但序号后**不留空格**：公文第三层写作「1.内容」——
+           那个空格是 Markdown 列表语法的分隔符，不是内容的一部分。
+         ★ 缩进一律「首行空 2 字」：不设左缩进、不设悬挂缩进。悬挂缩进会把首行顶到
+           版心最左边、续行反而缩进 2 字（用户看到的"首行少一块、续行多一块"），
+           公文里所有段落都是首行缩进 2 字符，不分层次。
+           续行是**独立段落**（手动换行符已换成回车），所以它同样首行缩进 2 字符。 */
       const lines = splitLines(b.text)
       // 续行与首行同字体：续行是这一条的内容，不该因为它没有序数就换回正文字体
       const st = lineStyle(lines[0], body)
-      out.push(
-        paraXml(runsXml(parseInlineRuns(marker + lines[0]), st, layout), {
-          ind: { leftChars: left, hangingChars: 100 },
-          line: layout.line,
-          jc: 'both',
-          rPr: st
-        })
-      )
-      /* 续行：手动换行符已经换成了回车，所以它是一条**独立段落**。
-         缩进给 leftChars=left（不悬挂）—— 这正是原文自动折行时文字该落的位置，
-         看着仍然像"同一条目折了行"，但不会再被两端对齐拉伸。 */
-      for (let k = 1; k < lines.length; k++) {
-        out.push(
-          paraXml(runsXml(parseInlineRuns(lines[k]), st, layout), {
-            ind: { leftChars: left, firstLineChars: 0 },
-            line: layout.line,
-            jc: 'both',
-            rPr: st
-          })
-        )
+      for (let k = 0; k < lines.length; k++) {
+        const prefix = k === 0 && b.ordered ? `${b.index}.` : ''
+        out.push(textPara(prefix + stripListMark(lines[k]), st))
       }
       continue
     }
 
     if (b.type === 'quote') {
-      // 引用：楷体（公文里第二层的字体；普通文档预设退回系统楷体）+ 左右各缩进 2 字符；
-      // 同样逐行独立成段
+      /* 引用：楷体（公文里第二层的字体；普通文档预设退回系统楷体），
+         缩进与其他段落完全一致 —— 首行 2 字符，既不左缩进也不右缩进。
+         ★ 引用块是"原样透传"进来的：`> - **长寿湖渔政AI预警**：…` 里的 `- ` 会跟着
+           内容进正文，这里补一刀 stripListMark()，否则正文里就留下「横杠 + 空格」。 */
       const st: RunStyle = {
         eastAsia: preset === 'gongwen' ? layout.h2.font : '楷体',
         latin: layout.latin,
         size: body.size
       }
       const lines = splitLines(b.text)
-      for (let k = 0; k < lines.length; k++) {
-        out.push(
-          paraXml(runsXml(parseInlineRuns(lines[k]), st, layout), {
-            ind: { leftChars: 200, rightChars: 200, firstLineChars: 0 },
-            line: layout.line,
-            jc: 'both',
-            rPr: st
-          })
-        )
-      }
+      for (let k = 0; k < lines.length; k++) out.push(textPara(stripListMark(lines[k]), st))
       continue
     }
 
     if (b.type === 'code') {
-      /* 代码：等宽小一号，左缩进 2 字符，单倍行距（固定行距配小字号会很难看）。
+      /* 代码：等宽小一号，单倍行距（固定行距配小字号会很难看）。
          ★ 代码块**不拆**：它的换行是内容本身的结构（少一个 \n 代码就变了），
-           必须留在同一个段落里用 <w:br/>。它本来就是左对齐，也不存在拉伸问题。 */
+           必须留在同一个段落里用 <w:br/>。它本来就是左对齐，也不存在拉伸问题。
+         ★ 缩进仍用首行 2 字符（不设左缩进）—— 全篇统一"首行空 2 字"这一条口径，
+           免得又冒出一个"文本之前空 2 字符"的段落。 */
       const runs: MdRun[] = [{ text: b.code, code: true }]
       const st: RunStyle = { eastAsia: '宋体', latin: layout.mono, size: layout.code.size }
       out.push(
         paraXml(runsXml(runs, st, layout), {
-          ind: { leftChars: 200, firstLineChars: 0 },
+          ind: { firstLineChars: layout.body.firstLineChars },
           line: -1,
           jc: 'left',
           rPr: st
@@ -650,9 +666,10 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
     }
 
     if (b.type === 'table') {
+      /* ★ 表后**不留空段落**。Markdown 表格语法本来就要求后面空一行，解析时那行已经
+         被丢掉了；这里再补一个空段，Word 里就是肉眼可见的一整行空白
+         （用户截图圈的就是它）。表格自带边框、和下文自然分开，不需要空行隔开。 */
       out.push(tableXml(b, layout))
-      // 表后空一行，否则紧跟着的正文会贴着表格
-      out.push(emptyParaXml(body, layout, layout.line))
       continue
     }
 

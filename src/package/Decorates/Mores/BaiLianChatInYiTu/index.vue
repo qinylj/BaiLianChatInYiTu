@@ -899,7 +899,11 @@ const loadStore = () => {
         .map((c: any) => ({ ...c, messages: Array.isArray(c.messages) ? c.messages : [] }))
       const limit = Number(o.value.maxHistoryCount) || 30
       conversations.value = conversations.value.slice(0, Math.max(1, limit))
-      if (conversations.value[0]) activeId.value = conversations.value[0].id
+      if (conversations.value[0]) {
+        activeId.value = conversations.value[0].id
+        /* 同上：读完历史后顶部对话对象也要落到这条会话所属的对象上 */
+        syncTargetFromActive()
+      }
     }
   } catch (e) {
     // 历史损坏 / 隐私模式下读不到，直接当空
@@ -925,12 +929,20 @@ const newConversation = (t: any, forceNew = false): Conversation => {
   if (!forceNew) {
     const cur = activeConv.value
     if (cur && cur.targetKind === kind && cur.targetId === t.id) return cur
-    const reuse = conversations.value.find(
-      c => c.targetKind === kind && c.targetId === t.id && !c.messages.length
-    )
-    if (reuse) {
-      activeId.value = reuse.id
-      return reuse
+    /**
+     * ★ 该对话对象下已经有会话了 → 回到「最近用过的那条」，而不是再开一条空的。
+     *   原来只复用「messages 为空」的那条：一旦该对象下唯一的会话已经聊过（不再为空），
+     *   切走再切回来就匹配不上，于是每次都新建 —— 表现就是
+     *   「列表里明明已经有 deepseek 的会话了，点回去却又冒出一条新对话」。
+     *   只有该对象下一条会话都没有时，才新建。
+     */
+    const mine = conversations.value.filter(c => c.targetKind === kind && c.targetId === t.id)
+    if (mine.length) {
+      const latest = mine.reduce((a, b) =>
+        Number(b.updatedAt || 0) > Number(a.updatedAt || 0) ? b : a
+      )
+      activeId.value = latest.id
+      return latest
     }
   }
   const conv: Conversation = {
@@ -965,14 +977,23 @@ const newChat = () => {
   saveStore()
 }
 
-const openConversation = (id: string) => {
-  if (busy.value) stop()
-  activeId.value = id
+/**
+ * 让顶部选中的对话对象跟随「当前会话」。
+ * 点历史条目 / 删掉当前会话 / 重载历史，三处都要做，否则会出现
+ * 底部高亮 A、顶部还停在 B 的错位 —— 这时候再发一条，会发到顶部那个 B 去。
+ */
+const syncTargetFromActive = () => {
   const c = activeConv.value
   if (c && c.targetKind && c.targetId) {
     localKind.value = c.targetKind
     localId.value = c.targetId
   }
+}
+
+const openConversation = (id: string) => {
+  if (busy.value) stop()
+  activeId.value = id
+  syncTargetFromActive()
   nextTick(scrollToBottom)
 }
 
@@ -1007,7 +1028,22 @@ const onKeyForDel = (e: KeyboardEvent) => {
 const removeConversation = async (id: string) => {
   const conv = conversations.value.find(c => c.id === id)
   conversations.value = conversations.value.filter(c => c.id !== id)
-  if (activeId.value === id) activeId.value = conversations.value[0] ? conversations.value[0].id : ''
+  if (activeId.value === id) {
+    const next = conversations.value[0]
+    activeId.value = next ? next.id : ''
+    /**
+     * ★ 删掉的若是当前会话，顶部对话对象必须跳到下面新选中的那条上。
+     *   只改 activeId 的话，底部历史高亮换了、顶部大模型/智能体还停在被删的那个，
+     *   两边对不上，再发一条就发到顶部那个对象去了。
+     */
+    if (next) {
+      syncTargetFromActive()
+    } else {
+      /* 全删光：回到面板里配的默认对话对象，别停在已经消失的那个上 */
+      localKind.value = o.value.targetKind === 'model' ? 'model' : 'agent'
+      localId.value = o.value.targetId || ''
+    }
+  }
   saveStore()
   // 顺带把网关上的会话删掉，失败不影响本地。
   // 会话是按对话对象建的，取它自己那份凭证去删。
@@ -1621,7 +1657,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.9'
+  version: '1.0.10'
 }
 </script>
 

@@ -138,6 +138,7 @@ BaiLianChatInYiTu/
 │   ├── verify-office-export.cjs   # 导出自检（185 项：行内交叉一致性 / 排版回归 / 层次序数 / 标题块 / 版面 / 页眉页脚与页码 / 字体分流 / zip / 编排）
 │   ├── verify_ooxml.py            # Python 标准库独立复验产物（179 项：zipfile 验 CRC、ElementTree 验 XML）
 │   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（68 项）
+│   ├── cdp-verify-conv-switch.cjs # 真浏览器自检：对话对象 ↔ 当前会话 的状态一致（12 项，需 dev server + /settings）
 └── src/
     ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（16 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
@@ -220,6 +221,12 @@ npm run pack         # 已编译过，只想重新打 zip
 面板顶部有「显示思考过程」「流式输出」开关；历史对话持久化、上下文条数、首轮自动建会话
 都在「对话设置」组里。
 
+**切换对话对象的语义**：点顶部某个大模型 / 智能体时，回到该对象**最近用过的那条会话**，
+只有该对象一条会话都没有时才新建 —— 不会每次点回去都冒出一条空对话
+（要新开一条请点历史区右上角的「＋ 新对话」）。反过来，底部选中哪条会话
+（点历史条目 / 删掉当前会话 / 刷新重载），顶部就高亮那条会话所属的对象，两边始终一致：
+**不会出现「底部高亮 A、顶部还停在 B」的错位** —— 错位时再发一条会发到 B 那边去。
+
 ---
 
 ## 五、自检怎么跑
@@ -232,9 +239,14 @@ node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本" 
 node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / 层次序数 / 标题块 / 版面 / 页眉页脚与页码 / 字体分流，185 项 + Python 交叉验证 179 项
 node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，68 项
 node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 9 项 / CHROME_UI=1 共 20 项）
+node tools/cdp-verify-conv-switch.cjs    # 真浏览器：切回已有对话对象不新建 / 删会话后顶部跟随（12 项）
 ```
 
-两个说明：
+三个说明：
+
+- `cdp-verify-conv-switch.cjs` **是唯一需要先跑 `npm run dev` 的自检**：它驱动的是
+  `http://127.0.0.1:8085/settings` 这个调试台路由，靠播种 localStorage 会话再点真实条目来验行为，
+  自己不起服务。其余自检都不需要 dev server。
 
 - `verify-office-export.cjs` 会调用 `tools/verify_ooxml.py`，用 **Python 标准库**把产物独立验一遍
   （`zipfile` 算 CRC、`ElementTree` 解析 XML）。这一步不是多余的：自己写的 zip 头和自己的解析器

@@ -81,7 +81,12 @@ BaiLianChatInYiTu/
 ├── .gitignore
 ├── integration/
 │   ├── README.md               # 放进宿主工程的集成步骤
-│   └── yitu-base-components.patch   # 对宿主工程的全部改动（6 文件 / 49 行新增）
+│   └── yitu-base-components.patch   # 对宿主工程的全部改动（7 文件）
+├── build/
+│   └── version.js              # 版本号唯一数据源 + 自增 + 构建戳（新增文件）
+├── tools/
+│   ├── bump-version.cjs        # 版本号命令行：查看 / 自增 / 指定
+│   └── pack.cjs                # 把 dist 打成带版本的交付 zip（零依赖 zip 写入）
 └── src/
     ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（10 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
@@ -125,8 +130,19 @@ cp    src/demo/SettingsVue.vue                        <工程>/src/demo/
 
 ```bash
 set COMP_NAME=BaiLianChatInYiTu && npm run build
-# 产物：<工程>/dist/BaiLianChatInYiTu@1.0.0.js + .css
+# 产物：<工程>/dist/BaiLianChatInYiTu@1.0.1.js + .css
 ```
+
+版本号会自动管（自增机制见 [`integration/README.md`](./integration/README.md) 第 4 节）：
+
+```bash
+npm run release      # 版本号 +1 → 编译 → 打包 zip，一条命令出交付物
+npm run ver          # 只看当前版本号，不改动
+npm run pack         # 已编译过，只想重新打 zip
+```
+
+编译日志里会打印本次的版本号、构建戳和部署路径；产物运行时把版本写进根节点
+`data-build` 属性并打一行控制台日志，用来确认大屏上跑的是哪一次编译。
 
 环境要求：Node 16+ / vue 3.2.27 / naive-ui 2.42.0（仅面板）/ lodash。
 

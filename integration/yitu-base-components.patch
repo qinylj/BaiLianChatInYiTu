@@ -1,3 +1,45 @@
+diff --git a/build/resolve-file.js b/build/resolve-file.js
+index 2aff20a..2e7e39c 100644
+--- a/build/resolve-file.js
++++ b/build/resolve-file.js
+@@ -16,6 +16,9 @@ const defaultVersion = require('./defaultVersion')
+ const components = []
+ 
+ function getComponents() {
++  // 该数组是模块级的，函数被调用多次（dev 取列表、prod 解析版本、版本工具取名）会累积重复项，
++  // 每轮开头清空一次。
++  components.length = 0
+   const componentsDir = readDirsRecursively('./src/package')
+   // console.log('componentsDir', componentsDir)
+   componentsDir.forEach(dir => {
+@@ -70,8 +73,10 @@ function readContentByFile(filePath) {
+  * 根据正则匹配版本号
+  */
+ function getVersionNum(inputString) {
+-  // 定义正则表达式
+-  const regex = /<script\s*lang="ts">([\s\S]*?)<\/script>/
++  // 必须锚定到行首：SFC 里的真标签一定独占一行。
++  // 若不锚定，正文/注释里只要出现一次 `<script lang="ts">` 字面量（我们组件里就有），
++  // 非贪婪匹配会从那一处开始截到下一个 </script>，抓到一段不含 version 的内容，版本号解析成 null。
++  const regex = /^<script\s+lang="ts">([\s\S]*?)<\/script>/m
+ 
+   // 使用正则表达式的 exec 方法进行匹配
+   const match = regex.exec(inputString)
+@@ -110,6 +115,14 @@ function parseComponent(compName) {
+   // console.log(stringContent)
+   const version = getVersionNum(stringContent)
+   // console.log('version', version)
++  if (version == null) {
++    throw new Error(
++      `没从 index.vue 里解析出版本号：${entry.replace(
++        'export.ts',
++        'index.vue'
++      )}。需要一个独占一行开头的 <script lang="ts"> 块，且块内写成 version: '1.0.0'（带引号）`
++    )
++  }
+   const isLe = compare(version, defaultVersion, '<')
+   if (isLe) {
+     throw new Error(
 diff --git a/build/webpack.base.conf.js b/build/webpack.base.conf.js
 index be112b7..99439fc 100644
 --- a/build/webpack.base.conf.js
@@ -29,10 +71,29 @@ index be112b7..99439fc 100644
    resolve: {
      extensions: [".ts", ".js", ".vue", ".json"],
 diff --git a/build/webpack.dev.conf.js b/build/webpack.dev.conf.js
-index c07f110..12b360b 100644
+index c07f110..24dee17 100644
 --- a/build/webpack.dev.conf.js
 +++ b/build/webpack.dev.conf.js
-@@ -38,7 +38,7 @@ module.exports = merge(WebpackBaseConfig, {
+@@ -14,8 +14,18 @@ const FriendlyErrorsWebpackPlugin = require('friendly-errors-webpack-plugin')
+ const config = require('../src/config/config.base.ts')
+ const HtmlWebpackPlugin = require('html-webpack-plugin')
+ const { getComponents } = require('./resolve-file')
++const { readVersion, buildStamp } = require('./version.js')
+ const webpack = require('webpack')
+ 
++// 调试台与出包共用同一版本号来源（dev 永不自增），读不到就留空，不让它阻断 dev server
++const devCompName = process.env.COMP_NAME || 'BaiLianChatInYiTu'
++let devVersion = ''
++try {
++  devVersion = readVersion(devCompName)
++} catch (e) {
++  devVersion = ''
++}
++
+ const list = getComponents()
+ module.exports = merge(WebpackBaseConfig, {
+   entry: {
+@@ -38,7 +48,7 @@ module.exports = merge(WebpackBaseConfig, {
        directory: path.join(__dirname, '../static'),
        watch: true
      },
@@ -41,12 +102,35 @@ index c07f110..12b360b 100644
      hot: true,
      port: 8085,
      historyApiFallback: true,
+@@ -65,7 +75,10 @@ module.exports = merge(WebpackBaseConfig, {
+     new FriendlyErrorsWebpackPlugin(),
+     // 将node环境读取的值传给main.js
+     new webpack.DefinePlugin({
+-      COMPONENT_LIST: JSON.stringify(list)
++      COMPONENT_LIST: JSON.stringify(list),
++      // 组件版本 + 构建戳（dev 态）：与生产同一数据源，方便调试台里对照"大屏上跑的哪一版"
++      __BL_VERSION__: JSON.stringify(devVersion),
++      __BL_BUILD__: JSON.stringify(`dev ${buildStamp().text}`)
+     })
+   ]
+ })
 diff --git a/build/webpack.prod.conf.js b/build/webpack.prod.conf.js
-index c42cdd7..dce3a18 100644
+index c42cdd7..ac99477 100644
 --- a/build/webpack.prod.conf.js
 +++ b/build/webpack.prod.conf.js
-@@ -17,7 +17,10 @@ const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPl
+@@ -7,6 +7,7 @@
+  */
+ 'use strict'
+ const path = require('path')
++const webpack = require('webpack')
+ const copyWebpackPlugin = require('copy-webpack-plugin')
+ const TerserPlugin = require('terser-webpack-plugin')
+ const { merge } = require('webpack-merge')
+@@ -15,17 +16,41 @@ const WebpackRulesConfig = require('./webpack.rules.conf')
+ const MiniCssExtractPlugin = require('mini-css-extract-plugin')
+ const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPlugin
  const { parseComponent } = require('./resolve-file.js')
++const { resolveVersion } = require('./version.js')
  
  // ☆☆☆☆☆☆☆☆☆☆☆ 组件编码 ☆☆☆☆☆☆☆☆☆☆☆☆☆☆☆☆
 -const compName = 'BarCommon'
@@ -56,8 +140,47 @@ index c42cdd7..dce3a18 100644
 +const compName = process.env.COMP_NAME || 'BaiLianChatInYiTu'
  // ☆☆☆☆☆☆☆☆☆☆☆ 改这里 ☆☆☆☆☆☆☆☆☆☆☆☆☆☆☆☆
  
++/*
++ * 版本号自增：默认**不改**源文件（调试期反复 build 不该把版本号刷成 1.0.37）。
++ * 需要自增时用 BUMP=patch|minor|major，见 build/version.js 头部注释与 package.json 的 build:bump。
++ */
++const info = resolveVersion(compName)
++
  /*
-@@ -64,7 +67,12 @@ module.exports = merge(WebpackBaseConfig, {
+  * entry: 组件打包入口文件  类似 'src/package/Decorates/Borders/Border03/export.ts'
+  * version: 每个组件的版本号 在 'src/package/Decorates/Borders/Border03/index.vue' 中定义
+  */
+ const [entry, version] = parseComponent(compName)
+ 
++// 双保险：自增写回的内容必须能被解析器按同一正则读出来，否则宁可编译失败也不要出一个名不对版的包
++if (version !== info.version) {
++  throw new Error(
++    `版本号解析不一致：写回后为 ${info.version}，解析器读到 ${version}。请检查 ${info.file} 的 <script lang="ts"> 块`
++  )
++}
++
++console.log(
++  `\n[BaiLianChatInYiTu] 组件 ${compName}  版本 ${info.version}` +
++    (info.from && info.from !== info.version ? `（自增 ${info.from} → ${info.version}）` : '') +
++    `\n                    构建戳 ${info.stamp.text}` +
++    `\n                    产物 ${compName}@${info.version}.js / .css  →  部署到 component/${compName}/${info.version}/\n`
++)
++
+ module.exports = merge(WebpackBaseConfig, {
+   mode: 'production',
+   entry: {
+@@ -59,12 +84,23 @@ module.exports = merge(WebpackBaseConfig, {
+   },
+   module: WebpackRulesConfig.module,
+   plugins: [
++    // 版本号 + 构建戳，编译期替换成字面量：运行时可由组件根节点 data-build 属性 / 控制台日志读到，
++    // 用来确认大屏上跑的到底是哪一次编译（改名不换哈希时，这是唯一的身份标识）
++    new webpack.DefinePlugin({
++      __BL_VERSION__: JSON.stringify(info.version),
++      __BL_BUILD__: JSON.stringify(info.stamp.text)
++    }),
+     new MiniCssExtractPlugin({
+       // filename: "./css/[name].[contenthash].css",
        filename: '[name]@' + version + '.css',
        chunkFilename: '[id]@' + version + '.css'
      }),
@@ -72,22 +195,29 @@ index c42cdd7..dce3a18 100644
      //   {
      //     apply: (compiler) => {
 diff --git a/package.json b/package.json
-index 4593a44..35b37cf 100644
+index 4593a44..eb65644 100644
 --- a/package.json
 +++ b/package.json
-@@ -12,8 +12,9 @@
+@@ -12,8 +12,16 @@
    "scripts": {
      "dev": "cross-env --max_old_space_size=4096 envMode=development webpack serve --config ./build/webpack.dev.conf.js --color",
      "test": "cross-env envMode=test webpack serve --config ./build/webpack.dev.conf.js --color",
 -    "build": "cross-env envMode=production webpack --config build/webpack.prod.conf.js  --color --analyze",
 -    "build:test": "cross-env envMode=test webpack --config build/webpack.prod.conf.js  --color --analyze",
 +    "build": "cross-env envMode=production webpack --config build/webpack.prod.conf.js  --color",
++    "build:bump": "cross-env envMode=production BUMP=patch webpack --config build/webpack.prod.conf.js --color",
++    "build:minor": "cross-env envMode=production BUMP=minor webpack --config build/webpack.prod.conf.js --color",
++    "build:major": "cross-env envMode=production BUMP=major webpack --config build/webpack.prod.conf.js --color",
++    "ver": "node tools/bump-version.cjs",
++    "pack": "node tools/pack.cjs",
++    "release": "npm run build:bump && node tools/pack.cjs",
++    "release:minor": "npm run build:minor && node tools/pack.cjs",
 +    "build:analyze": "cross-env envMode=production ANALYZE=1 webpack --config build/webpack.prod.conf.js --color",
 +    "build:test": "cross-env envMode=test webpack --config build/webpack.prod.conf.js  --color",
      "lint": "eslint ./src",
      "typeCheck": "tsc --noEmit"
    },
-@@ -28,7 +29,7 @@
+@@ -28,7 +36,7 @@
      "@types/webpack-env": "^1.16.2",
      "@typescript-eslint/eslint-plugin": "^5.0.0",
      "@typescript-eslint/parser": "^5.0.0",
@@ -96,7 +226,7 @@ index 4593a44..35b37cf 100644
      "autoprefixer": "8.0.0",
      "babel-eslint": "^10.1.0",
      "babel-loader": "^8.2.2",
-@@ -64,7 +65,7 @@
+@@ -64,7 +72,7 @@
      "webpack-cli": "^4.8.0",
      "webpack-dev-server": "^4.1.0",
      "webpack-merge": "^5.8.0",
@@ -105,7 +235,7 @@ index 4593a44..35b37cf 100644
    },
    "dependencies": {
      "@amap/amap-jsapi-loader": "^1.0.1",
-@@ -99,7 +100,7 @@
+@@ -99,7 +107,7 @@
      "maptalks": "^1.0.0-rc.18",
      "markdown-it": "^14.1.0",
      "mitt": "^3.0.0",
@@ -114,7 +244,7 @@ index 4593a44..35b37cf 100644
      "pinia": "2.0.13",
      "swiper": "^9.2.4",
      "video.js": "^8.3.0",
-@@ -107,7 +108,7 @@
+@@ -107,7 +115,7 @@
      "vue-demi": "^0.13.1",
      "vue-draggable-resizable-gorkys": "^2.4.8",
      "vue-echarts": "^6.5.4",

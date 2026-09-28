@@ -4,7 +4,7 @@
   * 能力：左侧栏（大模型 / 智能体 / 历史对话）+ 主区对话，主题、背景、显隐、清单、参数全部可配
 -->
 <template>
-  <div class="bailian-chat-in-yitu" :class="{ 'is-light': !themePreset.dark }" :style="rootStyle">
+  <div class="bailian-chat-in-yitu" :class="{ 'is-light': !themePreset.dark }" :style="rootStyle" :data-build="BUILD_TAG">
     <div class="ac-stage" :style="stageStyle">
       <!-- 背景层：只作用于对话区。
            外面套一层裁剪容器，因为 .ac-bg 需要 scale 放大来盖住模糊后的边缘露白，
@@ -406,6 +406,19 @@ import {
   StreamChunk,
   TargetKind
 } from './types'
+
+/*
+ * 构建标识：版本号的唯一来源是本文件末尾那个不带 setup 的 script lang="ts" 块里的 `version` 字段，
+ * 构建戳由 build/version.js 在编译时注入（define 成字面量）。
+ * 没有注入时（比如被别人单独拷走这个 .vue 用）走 typeof 兜底，不会 ReferenceError。
+ * 注意：这里别写出完整的 script 开标签字面量，打包脚本靠它定位版本块（见 build/resolve-file.js）。
+ */
+declare const __BL_VERSION__: string | undefined
+declare const __BL_BUILD__: string | undefined
+const BUILD_TAG =
+  typeof __BL_VERSION__ === 'undefined'
+    ? `dev / ${typeof __BL_BUILD__ === 'undefined' ? '未注入' : __BL_BUILD__}`
+    : `${__BL_VERSION__} / ${__BL_BUILD__}`
 
 const props = defineProps({
   chartConfig: {
@@ -1426,6 +1439,8 @@ if (typeof props.useChartDataFetch === 'function') {
 
 /* 删除确认的"点别处/按 Esc 取消"：捕获阶段监听，避免被行内的 @click.stop 吃掉 */
 onMounted(() => {
+  /* 出包后在大屏上"这张页面跑的是哪一版"一目了然：根节点 data-build 属性 + 一行控制台日志 */
+  console.info(`[BaiLianChatInYiTu] 版本 ${BUILD_TAG}`)
   document.addEventListener('click', onDocClickForDel, true)
   document.addEventListener('keydown', onKeyForDel)
 })
@@ -1440,7 +1455,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.0'
+  version: '1.0.1'
 }
 </script>
 

@@ -1149,7 +1149,9 @@ const send = async (preset?: string) => {
         signal
       )
     }
+    // 只拿到思考、没拿到正文也要说一声，否则气泡是空的（模型把内容全写进 <think> 且没闭合时会这样）
     if (!aiMsg.content && !aiMsg.thought) aiMsg.content = '（本轮无返回内容）'
+    else if (!aiMsg.content) aiMsg.content = '（本轮只返回了思考过程，没有正文）'
     emit('reply', { text: aiMsg.content, sessionId: conv.sessionId })
     if (props.bus && typeof props.bus.emit === 'function') {
       props.bus.emit('agent-chat:reply', { text: aiMsg.content, sessionId: conv.sessionId })

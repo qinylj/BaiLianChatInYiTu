@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * 真浏览器自检：点一下「导出 Word / Excel」，磁盘上到底有没有出现一个能打开的文件
+ * 真浏览器自检：点一下「导出 Word / TXT」，磁盘上到底有没有出现一个能打开的文件
  *
  *   node tools/verify-office-download.cjs              # 无头（默认）
  *   CHROME_UI=1 node tools/verify-office-download.cjs  # 真实窗口
@@ -61,7 +61,7 @@ const SAMPLE = [
 /* ---------- 1. 现场编译 TS，装进页面的迷你模块系统 ---------- */
 
 /** 依赖顺序：被依赖的必须先 __define，因为迷你 require 是同步解析的 */
-const MODULES = ['zip.ts', 'ooxml.ts', 'markdown.ts', 'docx.ts', 'xlsx.ts', 'download.ts', 'exporter.ts']
+const MODULES = ['zip.ts', 'ooxml.ts', 'markdown.ts', 'docx.ts', 'download.ts', 'exporter.ts']
 
 function compileModule(name) {
   const file = path.resolve(SRC, name)
@@ -82,7 +82,7 @@ const PAGE = `<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8" /><title>office download test</title></head>
 <body>
 <button id="btn-docx">导出 Word</button>
-<button id="btn-xlsx">导出 Excel</button>
+<button id="btn-txt">导出 TXT</button>
 <script>
   var __mods = {};
   window.__define = function (name, fn) {
@@ -101,12 +101,12 @@ ${MODULES.map(compileModule).join('\n')}
   var BL = require('exporter');
   var saveFile = require('download').saveFile;
   window.SAMPLE = ${JSON.stringify(SAMPLE)};
-  window.__res = { docx: null, xlsx: null, err: null };
+  window.__res = { docx: null, txt: null, err: null };
 
   /* 与组件里 exportMessage 的核心两行一致：造字节 → 落盘 */
   window.__run = function (kind) {
     try {
-      var res = BL.buildOfficeExport(kind, window.SAMPLE, {
+      var res = BL.buildOfficeExport(window.SAMPLE, {
         preset: 'gongwen',
         meta: ['导出时间：2026-09-28 19:30'],
         when: new Date(2026, 8, 28, 19, 30)
@@ -117,8 +117,18 @@ ${MODULES.map(compileModule).join('\n')}
       return { err: String((e && e.message) || e) };
     }
   };
+  /* TXT 那条链路给的是字符串（不是字节），落盘后由浏览器按 UTF-8 编码 */
+  window.__runTxt = function () {
+    try {
+      var res = BL.buildMessageText(window.SAMPLE, { when: new Date(2026, 8, 28, 19, 30) });
+      var ok = saveFile(res.fileName, res.content, res.mime);
+      return { ok: ok, fileName: res.fileName, mime: res.mime, content: res.content };
+    } catch (e) {
+      return { err: String((e && e.message) || e) };
+    }
+  };
   document.getElementById('btn-docx').onclick = function () { window.__res.docx = window.__run('docx'); };
-  document.getElementById('btn-xlsx').onclick = function () { window.__res.xlsx = window.__run('xlsx'); };
+  document.getElementById('btn-txt').onclick = function () { window.__res.txt = window.__runTxt(); };
 </script>
 </body></html>`
 
@@ -288,7 +298,7 @@ async function waitForFile(ext, timeoutMs = 20000) {
 /* ---------- 主流程 ---------- */
 async function main() {
   console.log('='.repeat(68))
-  console.log('Office 导出落盘自检（真浏览器点按钮 → 磁盘上出现文件）')
+  console.log('导出落盘自检（真浏览器点按钮 → 磁盘上出现文件：.docx / .txt）')
   console.log('='.repeat(68))
 
   const browser = findBrowser()
@@ -377,7 +387,7 @@ async function main() {
       }
     }
 
-    const pageReady = await evalJs('typeof window.__run === "function"')
+    const pageReady = await evalJs('typeof window.__run === "function" && typeof window.__runTxt === "function"')
     check('页面里的导出模块加载成功', pageReady === true)
 
     /* ---------------- A. Word ---------------- */
@@ -422,37 +432,46 @@ async function main() {
       check('Python zipfile 校验落盘文件通过（CRC + XML 独立验证）', py.ok, py.out || py.err)
     }
 
-    /* ---------------- B. Excel ---------------- */
-    console.log('\n【B】点击「导出 Excel」')
-    await clickReal('#btn-xlsx')
+    /* ---------------- B. TXT ---------------- */
+    console.log('\n【B】点击「导出 TXT」')
+    await clickReal('#btn-txt')
     await sleep(400)
-    const xlsxRes = await evalJs('window.__res.xlsx')
-    check('页面侧调用返回成功', xlsxRes && xlsxRes.ok === true, JSON.stringify(xlsxRes))
-    check('文件名是 .xlsx', xlsxRes && /\.xlsx$/.test(xlsxRes.fileName), xlsxRes && xlsxRes.fileName)
+    const txtRes = await evalJs('window.__res.txt')
+    check('页面侧调用返回成功', txtRes && txtRes.ok === true, JSON.stringify(txtRes && { err: txtRes.err }))
+    check(
+      '文件名是 .txt 且带正文首个标题与时间戳',
+      txtRes && /危险化学品事故应急预案_\d{8}-\d{4}\.txt$/.test(txtRes.fileName),
+      txtRes && txtRes.fileName
+    )
+    check('MIME 是 text/plain', txtRes && /^text\/plain/.test(txtRes.mime), txtRes && txtRes.mime)
 
-    const xlsxName = await waitForFile('.xlsx')
-    check('磁盘上真的出现了 .xlsx 文件', !!xlsxName, fs.readdirSync(OUT_DIR).join(', ') || '（空）')
-    if (xlsxName) {
-      const p = path.join(OUT_DIR, xlsxName)
+    const txtName = await waitForFile('.txt')
+    check('磁盘上真的出现了 .txt 文件', !!txtName, fs.readdirSync(OUT_DIR).join(', ') || '（空）')
+    if (txtName) {
+      const p = path.join(OUT_DIR, txtName)
       const buf = fs.readFileSync(p)
-      check('落盘文件大小与页面里生成的字节数一致', buf.length === xlsxRes.size, {
+      const text = buf.toString('utf8')
+      const want = txtRes && txtRes.content ? Buffer.byteLength(txtRes.content, 'utf8') : -1
+      check('落盘字节数 = 页面里字符串的 UTF-8 编码长度（没被截断）', buf.length === want, {
         disk: buf.length,
-        page: xlsxRes.size
+        page: want
       })
-      const wb = readZipEntry(buf, 'xl/workbook.xml').toString('utf8')
-      check('工作簿里有「内容」与「表格1」两个工作表',
-        /name="内容"/.test(wb) && /name="表格1"/.test(wb), wb)
-      const s2 = readZipEntry(buf, 'xl/worksheets/sheet2.xml').toString('utf8')
-      check('表格数据落在独立单元格里', /液氯/.test(s2) && /剧毒/.test(s2))
-      const py = await pythonVerify(p)
-      check('Python zipfile 校验落盘文件通过', py.ok, py.out || py.err)
+      check('落盘文件开头是 UTF-8 BOM（EF BB BF）',
+        buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf, [buf[0], buf[1], buf[2]])
+      check('换行是 CRLF（记事本能正常显示）',
+        text.indexOf('\r\n') > 0 && !/[^\r]\n/.test(text),
+        JSON.stringify(text.slice(0, 40)))
+      check('没有残留 Markdown 语法符号与分割线横杠',
+        text.indexOf('**') < 0 && text.indexOf('----------') < 0, JSON.stringify(text.slice(0, 160)))
+      check('表格被拍平成可读文本（表头与单元格都在）',
+        /姓名 \| 危险特性/.test(text) && /液氯/.test(text))
     }
 
     /* ---------------- C. 两个文件都留下了 ---------------- */
     console.log('\n【C】目录清点')
     const all = fs.readdirSync(OUT_DIR)
     check('两个文件都在，且没有 .crdownload 残留',
-      all.filter(n => /\.(docx|xlsx)$/i.test(n)).length === 2 && !all.some(n => n.endsWith('.crdownload')),
+      all.filter(n => /\.(docx|txt)$/i.test(n)).length === 2 && !all.some(n => n.endsWith('.crdownload')),
       all)
 
     ok = fails.length === 0

@@ -1,30 +1,28 @@
 /*
  * @Description: 对话导出内容构造
  *
- * 五种形态：
+ * 四种形态：
  *   html —— 自包含单文件，标题/列表/表格/加粗都是真实排版，双击可看，也能直接粘进 Word
  *   txt  —— 去掉 Markdown 语法符号的纯文本（含 BOM，Windows 记事本不糊中文）
  *   md   —— 原始 Markdown 源码，给需要留档、二次加工的场景
  *   docx —— Word 文档，默认按党政机关公文格式（GB/T 9704—2012）排版，见 docx.ts
- *   xlsx —— Excel 工作簿，正文一列通读 + 每个表格一个独立工作表，见 xlsx.ts
  *
- * 前三种是纯字符串（不碰 DOM / Blob），后两种产出字节，方便在 Node 侧直接跑断言；
+ * 前三种是纯字符串（不碰 DOM / Blob），最后一种产出字节，方便在 Node 侧直接跑断言；
  * 落盘由调用方负责（download.ts）。
  */
 import { Conversation, ChatAttachment } from './types'
 import { renderMarkdown, renderMarkdownToText, escapeHtml, parseMarkdownBlocks } from './markdown'
 import { buildDocx } from './docx'
-import { buildXlsx } from './xlsx'
 import { MIME } from './ooxml'
 
-export type ExportFormat = 'html' | 'txt' | 'md' | 'docx' | 'xlsx'
+export type ExportFormat = 'html' | 'txt' | 'md' | 'docx'
 
 export interface ExportResult {
   fileName: string
-  /** 文本格式的内容；docx / xlsx 时为空串（内容在 bytes 里） */
+  /** 文本格式的内容；docx 时为空串（内容在 bytes 里） */
   content: string
   mime: string
-  /** 二进制格式（docx / xlsx）的字节 */
+  /** 二进制格式（docx）的字节 */
   bytes?: Uint8Array
 }
 
@@ -180,14 +178,32 @@ function buildMarkdown(conv: Conversation, stampText: string): string {
 }
 
 /**
- * 生成 Office 文件（docx / xlsx）。
+ * 从正文里挑一个文档标题：**首个标题 > 首段前 24 字 > "文档"**。
+ * 两条导出链路（Word / TXT）共用，保证同一个回答导出的文件名与文档标题是一致的。
+ */
+export function pickDocTitle(markdown: string): string {
+  const blocks = parseMarkdownBlocks(markdown || '')
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i]
+    if (b.type === 'heading') return b.text
+  }
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i]
+    if (b.type === 'para' || b.type === 'item') {
+      return b.text.replace(/\s+/g, ' ').trim().slice(0, 24)
+    }
+  }
+  return '文档'
+}
+
+/**
+ * 生成 Word 文档（.docx）。
  * 接收 **Markdown 文本**而不是 Conversation：消息级导出（单条回答）和会话级导出
  * 都走这里，前者传消息正文，后者传拼好的 Markdown，不必各写一遍。
  *
- * @param kind  'docx' 公文 Word | 'xlsx' 工作簿
- * @param text  待转换的 Markdown 文本
+ * @param text 待转换的 Markdown 文本
  */
-export function buildOfficeExport(kind: 'docx' | 'xlsx', text: string, o?: OfficeOptions): ExportResult {
+export function buildOfficeExport(text: string, o?: OfficeOptions): ExportResult {
   const opt: OfficeOptions = o || {}
   const when = opt.when || new Date()
   let blocks = parseMarkdownBlocks(text)
@@ -205,35 +221,11 @@ export function buildOfficeExport(kind: 'docx' | 'xlsx', text: string, o?: Offic
         break
       }
     }
-    if (!title) {
-      // 连标题都没有：拿第一段的前 24 个字当文件名/文档标题
-      for (let i = 0; i < blocks.length; i++) {
-        const b = blocks[i]
-        if (b.type === 'para' || b.type === 'item') {
-          title = b.text.replace(/\s+/g, ' ').slice(0, 24)
-          break
-        }
-      }
-    }
-    if (!title) title = '文档'
+    if (!title) title = pickDocTitle(text)
   }
 
   const base = safeFileName(title)
   const name = `${base}_${fileStamp(when)}`
-
-  if (kind === 'xlsx') {
-    return {
-      fileName: `${name}.xlsx`,
-      content: '',
-      mime: MIME.xlsx,
-      bytes: buildXlsx(blocks, {
-        title,
-        sheetName: '内容',
-        author: opt.author,
-        when
-      })
-    }
-  }
 
   return {
     fileName: `${name}.docx`,
@@ -252,11 +244,30 @@ export function buildOfficeExport(kind: 'docx' | 'xlsx', text: string, o?: Offic
 }
 
 /**
+ * 单条回答导出成纯文本（.txt）。
+ *
+ * 与 Word 那条链路刻意不同：**不做 Markdown 结构转换**，直接取渲染后的文字，
+ * 所以它永远不会因为解析器漏了一种语法而丢内容 —— 这是"先复制出来再说"的兜底出口。
+ * 收尾与 buildText 保持一致（BOM + CRLF），Windows 记事本 / 公文写作工具才不会糊中文。
+ */
+export function buildMessageText(markdown: string, o?: { title?: string; when?: Date }): ExportResult {
+  const opt: { title?: string; when?: Date } = o || {}
+  const d = opt.when || new Date()
+  const body = renderMarkdownToText(markdown || '')
+  const text = ('\ufeff' + body).replace(/\r\n?/g, '\n').replace(/\n/g, '\r\n')
+  return {
+    fileName: `${safeFileName(opt.title || pickDocTitle(markdown))}_${fileStamp(d)}.txt`,
+    content: text,
+    mime: 'text/plain;charset=utf-8'
+  }
+}
+
+/**
  * 生成导出文件内容。
  * @param conv      当前会话
  * @param format    导出格式（来自 option.exportFormat）
  * @param stampText 导出时间展示文案，由调用方格式化（保持本函数纯净、可测）
- * @param office    docx / xlsx 的排版选项（来自设置面板）
+ * @param office    Word 排版的选项（来自设置面板）
  */
 export function buildExport(
   conv: Conversation,
@@ -266,11 +277,11 @@ export function buildExport(
 ): ExportResult {
   const base = safeFileName(conv.title || conv.targetName)
   const raw = String(format)
-  const known = ['html', 'txt', 'md', 'docx', 'xlsx']
+  const known = ['html', 'txt', 'md', 'docx']
   const fmt = (known.indexOf(raw) >= 0 ? raw : 'html') as ExportFormat
 
-  if (fmt === 'docx' || fmt === 'xlsx') {
-    // 会话级 Office 导出：先把整个会话拼成 Markdown，再交给同一套转换
+  if (fmt === 'docx') {
+    // 会话级 Word 导出：先把整个会话拼成 Markdown，再交给同一套转换
     const opt: OfficeOptions = {
       title: conv.title || conv.targetName || '对话记录',
       preset: office && office.preset,
@@ -282,7 +293,7 @@ export function buildExport(
     if (conv.sessionId) meta.push(`会话标识：${conv.sessionId}`)
     meta.push(`共 ${conv.messages.length} 条消息`)
     opt.meta = meta
-    return buildOfficeExport(fmt, buildMarkdown(conv, stampText), opt)
+    return buildOfficeExport(buildMarkdown(conv, stampText), opt)
   }
 
   if (fmt === 'md') {

@@ -101,17 +101,17 @@
                 />
               </div>
 
-              <!-- 消息级导出：每条回答脚注里的「导出 Word / Excel」，
+              <!-- 消息级导出：每条回答脚注里的「导出 Word / TXT」，
                    与顶栏「导出」的区别是只导当前这一条，不导整个会话 -->
               <div class="sub3">
                 <div class="sub3-head">消息导出按钮</div>
                 <CustomSwitch
-                  label="显示 Word / Excel 按钮"
+                  label="显示 Word / TXT 按钮"
                   v-model:value="optionData.showMsgExport"
                   elMarginBottom="10px"
                 />
                 <template v-if="optionData.showMsgExport">
-                  <div class="subtitle">Word 排版</div>
+                  <div class="subtitle">Word 排版（TXT 导出不受此影响）</div>
                   <CustomInputSelect
                     label="排版预设"
                     v-model:value="optionData.docxPreset"
@@ -128,7 +128,9 @@
                       「标准公文格式」按 GB/T 9704—2012 排版：页边距上 37 / 下 35 / 左 28 / 右 26 mm，
                       正文三号仿宋_GB2312，固定行距 28.8 磅，首行缩进 2 字符，标题二号小标宋居中，
                       页脚「— 1 —」页码。<br />
-                      标题字体「方正小标宋简体」需本机已安装，未安装时 Word 会自动回退成默认字体。
+                      标题字体「方正小标宋简体」需本机已安装，未安装时 Word 会自动回退成默认字体。<br />
+                      「导出 TXT」给的是渲染后的纯文本（去掉 Markdown 符号、含 BOM 与 CRLF），
+                      不含排版、不受上面两项设置影响。
                     </div>
                   </div>
                 </template>
@@ -830,8 +832,7 @@ const exportFormatOptions = [
   { label: 'HTML（渲染后的排版）', value: 'html' },
   { label: '纯文本（去语法符号）', value: 'txt' },
   { label: 'Markdown 原文', value: 'md' },
-  { label: 'Word 文档（.docx）', value: 'docx' },
-  { label: 'Excel 工作簿（.xlsx）', value: 'xlsx' }
+  { label: 'Word 文档（.docx）', value: 'docx' }
 ]
 
 /** Word 排版预设：公文格式是默认，普通文档给"不想要公文壳子"的场景 */

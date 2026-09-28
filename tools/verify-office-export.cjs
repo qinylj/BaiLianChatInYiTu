@@ -5,7 +5,8 @@
  * 五组：
  *   【1】行内解析交叉一致性 —— parseInlineRuns（结构化）与 renderMarkdown（HTML）
  *        是两套独立实现，对同一批样本必须产出等价结果。这条是防"两份解析漂移"的锁。
- *   【2】块级解析与导出编排（标题自动提取、文件名、空内容兜底）
+ *   【2】块级解析与导出编排（标题自动提取、文件名、空内容兜底），
+ *        外加三条排版回归：软换行段落必须左对齐、分割线不落地、TXT 的收尾与去语法
  *   【3】zip 结构自解析 —— 用独立的解析代码读回中央目录，逐个核对 CRC 与大小
  *   【4】调用 tools/verify_ooxml.py（zipfile + ElementTree）做跨语言交叉验证
  *   【5】Node 产物落盘位置与体积
@@ -50,7 +51,7 @@ function section(t) {
 function compile() {
   const babel = require('@babel/core')
   fs.mkdirSync(TMP, { recursive: true })
-  const files = ['markdown.ts', 'zip.ts', 'ooxml.ts', 'docx.ts', 'xlsx.ts', 'exporter.ts']
+  const files = ['markdown.ts', 'zip.ts', 'ooxml.ts', 'docx.ts', 'exporter.ts']
   files.forEach(f => {
     const src = path.join(SRC, f)
     const out = babel.transformFileSync(src, {
@@ -104,6 +105,11 @@ const GONGWEN_SAMPLE = [
   '',
   '本预案自发布之日起施行。'
 ].join('\n')
+
+/* 软换行样本：模型很爱写"一句一行"，这几行在 Markdown 里属于**同一个**段落，
+   转成 Word 就是同一个 <w:p> 里的 <w:br/> —— 两端对齐会把它们逐行拉到版心宽。 */
+const SOFT_BREAK_SAMPLE =
+  '一、应急组织机构\n\n应急指挥部\n总指挥：企业主要负责人\n成员：生产、安全、环保、医疗等部门负责人'
 
 /* ------------------------------ 【1】行内交叉一致性 ------------------------------ */
 
@@ -180,7 +186,7 @@ function groupInline(md) {
 
 /* ------------------------------ 【2】块级与编排 ------------------------------ */
 
-function groupBlocks(md, docx, xlsx, exporter) {
+function groupBlocks(md, exporter) {
   section('【2】块级解析与导出编排')
 
   const blocks = md.parseMarkdownBlocks(GONGWEN_SAMPLE)
@@ -220,7 +226,7 @@ function groupBlocks(md, docx, xlsx, exporter) {
     unclosed)
 
   // 标题自动提取
-  const auto = exporter.buildOfficeExport('docx', '# 某某事故应急预案\n\n正文内容。', { when: new Date(2026, 8, 28, 17, 30) })
+  const auto = exporter.buildOfficeExport('# 某某事故应急预案\n\n正文内容。', { when: new Date(2026, 8, 28, 17, 30) })
   check('未指定标题时自动取正文首个标题', /某某事故应急预案/.test(auto.fileName), auto.fileName)
   const blocksAfter = md.parseMarkdownBlocks('# 某某事故应急预案\n\n正文内容。')
   check('自动提取的标题块仍能独立解析', blocksAfter[0].type === 'heading')
@@ -236,25 +242,80 @@ function groupBlocks(md, docx, xlsx, exporter) {
     /_\d{8}-\d{4}\.docx$/.test(auto.fileName), auto.fileName)
 
   // 空内容兜底
-  const emptyDoc = exporter.buildOfficeExport('docx', '', { title: '空' })
+  const emptyDoc = exporter.buildOfficeExport('', { title: '空' })
   check('空内容也能产出非空文档', emptyDoc.bytes.length > 0, emptyDoc.bytes.length)
-  const emptyXls = exporter.buildOfficeExport('xlsx', '')
-  check('空内容也能产出非空工作簿', emptyXls.bytes.length > 0, emptyXls.bytes.length)
 
   // 脏字符：控制字符 + 孤立代理项
   const dirty = '正常文本\u0000\u0001\u000b 落单代理 \ud83d 结束 <script>alert(1)</script>'
-  const dirtyDoc = exporter.buildOfficeExport('docx', dirty, { title: '脏' })
+  const dirtyDoc = exporter.buildOfficeExport(dirty, { title: '脏' })
   const dirtyXml = readZipEntry(Buffer.from(dirtyDoc.bytes), 'word/document.xml').toString('utf8')
   check('控制字符被清除（document.xml 里没有裸控制字符）',
     !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(dirtyXml))
   check('孤立代理项被清除（不会生成非法 UTF-8）', !/\ud83d(?![\udc00-\udfff])/.test(dirtyXml))
 
-  // 只有表格 / 只有标题
-  const onlyTable = exporter.buildOfficeExport('docx', '| a | b |\n| --- | --- |\n| 1 | 2 |', { title: '表' })
+  // 只有表格
+  const onlyTable = exporter.buildOfficeExport('| a | b |\n| --- | --- |\n| 1 | 2 |', { title: '表' })
   check('只有表格的输入也能生成文档', onlyTable.bytes.length > 0)
-  const onlyXls = exporter.buildOfficeExport('xlsx', '| a | b |\n| --- | --- |\n| 1 | 2 |')
-  const wb = readZipEntry(Buffer.from(onlyXls.bytes), 'xl/workbook.xml').toString('utf8')
-  check('含表格时额外生成「表格1」工作表', /name="表格1"/.test(wb), wb)
+
+  /* ---------- ★ 排版回归一：软换行段落不能被两端对齐拉伸 ---------- */
+
+  /** 取 document.xml 里的各段（按 <w:p> 切开；够用，且不必引 XML 解析器） */
+  const parasOf = xml => xml.split('<w:p>').slice(1)
+  const jcOf = p => (p.match(/<w:jc [^/]*\/>/) || ['(无 jc)'])[0]
+
+  /* 模型很爱写"一句一行"，它们在 Markdown 里属于**同一个**段落（text 里的 \n），
+     转成 Word 就是同一个 <w:p> 里的 <w:br/>。而 Word 的两端对齐只放过段落最后一行，
+     前面每一行都会被拉到版心宽度 —— 排成「应　　急　　指　　挥　　部」。 */
+  const softXml = readZipEntry(
+    Buffer.from(exporter.buildOfficeExport(SOFT_BREAK_SAMPLE, { title: '软换行' }).bytes),
+    'word/document.xml'
+  ).toString('utf8')
+  const softParas = parasOf(softXml)
+  const multiLine = softParas.filter(p => p.indexOf('<w:br/>') >= 0)
+  const bothOneLine = softParas.filter(p => p.indexOf('<w:br/>') < 0 && /<w:jc w:val="both"\/>/.test(p))
+  check('样本里确实存在"多行段落"', multiLine.length === 1, multiLine.length)
+  check('多行段落降级为左对齐（否则每个短行都被拉到版心宽）',
+    multiLine.every(p => /<w:jc w:val="left"\/>/.test(p)), multiLine.map(jcOf))
+  check('多行段落里不再出现两端对齐', multiLine.every(p => !/<w:jc w:val="both"\/>/.test(p)), multiLine.map(jcOf))
+  check('软换行本身被保留（3 行 → 2 个 <w:br/>，没被拆散或吞掉）',
+    multiLine.every(p => (p.match(/<w:br\/>/g) || []).length === 2), multiLine.map(p => p.split('<w:br/>').length - 1))
+  check('单行正文段落仍是两端对齐（没有把整篇都改左对齐）',
+    bothOneLine.length === 1 && softParas.length === 3, { both: bothOneLine.length, paras: softParas.length })
+
+  /* ---------- ★ 排版回归二：分割线不落地 ---------- */
+
+  const gwXml = readZipEntry(
+    Buffer.from(exporter.buildOfficeExport(GONGWEN_SAMPLE, {
+      title: '分割线',
+      when: new Date(2026, 8, 28, 17, 30)
+    }).bytes),
+    'word/document.xml'
+  ).toString('utf8')
+  check('分割线不再生成段落下边框（Word 里不该出现那条横线）', gwXml.indexOf('<w:pBdr>') < 0)
+  check('分割线上下的正文都还在（只丢那一行，没吞内容）',
+    gwXml.indexOf('12345') >= 0 && gwXml.indexOf('本预案自发布之日起施行。') >= 0)
+
+  /* ---------- ★ 纯文本导出（消息级 TXT） ---------- */
+
+  const txt = exporter.buildMessageText('# 某某预案\n\n正文**加粗**与*斜体*。\n\n---\n\n结尾。', {
+    when: new Date(2026, 8, 28, 17, 30)
+  })
+  check('TXT 文件名 = 正文首个标题 + 时间戳',
+    /^某某预案_\d{8}-\d{4}\.txt$/.test(txt.fileName), txt.fileName)
+  check('TXT 的 MIME 是 text/plain', /^text\/plain/.test(txt.mime), txt.mime)
+  check('TXT 没有 bytes（是字符串格式）', !txt.bytes)
+  check('TXT 带 BOM（Windows 记事本不糊中文）', txt.content.charCodeAt(0) === 0xfeff)
+  check('TXT 换行统一成 CRLF', !/[^\r]\n/.test(txt.content), JSON.stringify(txt.content))
+  check('TXT 不含 Markdown 语法符号', txt.content.indexOf('**') < 0 && txt.content.indexOf('*斜体*') < 0)
+  check('TXT 不含分割线横杠', txt.content.indexOf('---') < 0 && txt.content.indexOf('----------') < 0)
+  check('TXT 的正文内容完整', /正文加粗与斜体。/.test(txt.content) && /结尾。/.test(txt.content))
+
+  // 标题规则：Word 与 TXT 共用 pickDocTitle，两条链路导出同一个回答时文件名前缀必须一致
+  check('pickDocTitle：取正文首个标题', exporter.pickDocTitle('# 某某预案\n\n正文。') === '某某预案')
+  check('pickDocTitle：没有标题时取首段前 24 字',
+    exporter.pickDocTitle('这是一段完全没有标题的开头文字，用来验证兜底规则是否生效。') ===
+      '这是一段完全没有标题的开头文字，用来验证兜底规则是否生效。'.slice(0, 24))
+  check('pickDocTitle：完全空内容给「文档」', exporter.pickDocTitle('') === '文档')
 }
 
 /* ------------------------------ 【3】zip 自解析 ------------------------------ */
@@ -319,9 +380,8 @@ function groupZip(zip) {
     'word/styles.xml',
     'word/settings.xml',
     'word/footer1.xml',
-    'xl/workbook.xml',
-    'xl/styles.xml',
-    'xl/worksheets/sheet1.xml'
+    'docProps/core.xml',
+    'docProps/app.xml'
   ]
   const data = parts.map(n => Buffer.from('内容 ' + n + ' —— 中文与 ASCII 混排 to test utf8'))
   const buf = Buffer.from(zip.buildZip(parts.map((n, i) => ({ name: n, data: data[i] }))))
@@ -420,30 +480,30 @@ async function groupPython() {
 function groupArtifacts(exporter) {
   section('【5】产物落盘')
   fs.mkdirSync(OUT, { recursive: true })
+  /* 先清掉上一轮的产物：否则已下线格式（比如 xlsx）的旧文件会被 Python 侧当成
+     新产物校验通过 —— 那种"绿"比红更危险。 */
+  fs.readdirSync(OUT).forEach(n => fs.unlinkSync(path.join(OUT, n)))
 
   const cases = [
-    ['case-gongwen.docx', exporter.buildOfficeExport('docx', GONGWEN_SAMPLE, {
+    ['case-gongwen.docx', exporter.buildOfficeExport(GONGWEN_SAMPLE, {
       title: '危险化学品事故应急预案',
       preset: 'gongwen',
       meta: ['导出时间：2026-09-28 17:30', '来源：BaiLianChatInYiTu'],
       when: new Date(2026, 8, 28, 17, 30)
     })],
-    ['case-plain.docx', exporter.buildOfficeExport('docx', '普通文档**加粗**与*斜体*。\n\n- 一项\n- 两项', {
+    ['case-plain.docx', exporter.buildOfficeExport('普通文档**加粗**与*斜体*。\n\n- 一项\n- 两项', {
       title: '普通文档',
       preset: 'plain',
       when: new Date(2026, 8, 28, 17, 30)
     })],
-    ['case-empty.docx', exporter.buildOfficeExport('docx', '', { title: '空文档', when: new Date(2026, 8, 28, 17, 30) })],
-    ['case-dirty.docx', exporter.buildOfficeExport('docx', '脏字符：\u0000\u0001\u000b\ud83d 与 <script>alert(1)</script> 混排', {
+    ['case-empty.docx', exporter.buildOfficeExport('', { title: '空文档', when: new Date(2026, 8, 28, 17, 30) })],
+    ['case-dirty.docx', exporter.buildOfficeExport('脏字符：\u0000\u0001\u000b\ud83d 与 <script>alert(1)</script> 混排', {
       title: '脏字符',
       when: new Date(2026, 8, 28, 17, 30)
     })],
-    ['case-content.xlsx', exporter.buildOfficeExport('xlsx', GONGWEN_SAMPLE, {
-      title: '危险化学品事故应急预案',
-      when: new Date(2026, 8, 28, 17, 30)
-    })],
-    ['case-notable.xlsx', exporter.buildOfficeExport('xlsx', '没有表格的普通内容。\n\n- 一项\n- 两项', {
-      title: '无表格',
+    // 给 Python 侧的排版回归用：含软换行段落的独立产物
+    ['case-softbreak.docx', exporter.buildOfficeExport(SOFT_BREAK_SAMPLE, {
+      title: '软换行段落',
       when: new Date(2026, 8, 28, 17, 30)
     })]
   ]
@@ -457,6 +517,18 @@ function groupArtifacts(exporter) {
     check(name + ' 的 content 为空（内容在 bytes 里）', res.content === '')
   })
 
+  /* 纯文本产物：没有字节，直接落盘字符串（给 deliverable 用同一份样本） */
+  const txtCase = exporter.buildMessageText(GONGWEN_SAMPLE, {
+    title: '危险化学品事故应急预案',
+    when: new Date(2026, 8, 28, 17, 30)
+  })
+  fs.writeFileSync(path.join(OUT, 'case-content.txt'), txtCase.content, 'utf8')
+  check('case-content.txt 已生成（' + (txtCase.content.length / 1024).toFixed(1) + ' KB）',
+    txtCase.content.length > 200, txtCase.content.length)
+  check('case-content.txt 的 MIME 是 text/plain', /^text\/plain/.test(txtCase.mime), txtCase.mime)
+  check('case-content.txt 里没有 Markdown 语法符号与分割线横杠',
+    txtCase.content.indexOf('**') < 0 && txtCase.content.indexOf('----------') < 0)
+
   console.log('\n  产物目录：' + path.relative(ROOT, OUT).replace(/\\/g, '/'))
 }
 
@@ -464,18 +536,16 @@ function groupArtifacts(exporter) {
 
 async function main() {
   console.log('='.repeat(68))
-  console.log('Office 导出自检（docx 公文格式 / xlsx 工作簿）')
+  console.log('导出内容自检（Word 公文格式 / 纯文本 TXT）')
   console.log('='.repeat(68))
 
   compile()
   const md = require(path.join(TMP, 'markdown.js'))
   const zip = require(path.join(TMP, 'zip.js'))
-  const docx = require(path.join(TMP, 'docx.js'))
-  const xlsx = require(path.join(TMP, 'xlsx.js'))
   const exporter = require(path.join(TMP, 'exporter.js'))
 
   groupInline(md)
-  groupBlocks(md, docx, xlsx, exporter)
+  groupBlocks(md, exporter)
   groupZip(zip)
   groupArtifacts(exporter)
   await groupPython()

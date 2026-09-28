@@ -19,7 +19,6 @@ import xml.etree.ElementTree as ET
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
-SS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 CT = '{http://schemas.openxmlformats.org/package/2006/content-types}'
 RELS = '{http://schemas.openxmlformats.org/package/2006/relationships}'
 
@@ -330,7 +329,7 @@ def check_docx_empty(path):
 
 def check_docx_dirty(path):
     """控制字符、孤立代理项、脚本标签：都不能让 XML 变成非法"""
-    section('【C】docx / xlsx —— 脏字符与注入防护')
+    section('【C】docx —— 脏字符与注入防护')
     parts = load(path)
     if not parts:
         return
@@ -348,133 +347,79 @@ def check_docx_dirty(path):
 
 
 # ==================================================================== #
-# xlsx
+# 排版回归（跨语言再验一次：Node 侧已断言，这里用 ElementTree 独立复算）
 # ==================================================================== #
 
-def check_xlsx_content(path, expect_tables):
-    section('【D】xlsx —— 工作簿结构 / 单元格定位 / 数字类型')
-    parts = load(path)
-    if not parts:
+def check_layout_regressions(gongwen_path, softbreak_path):
+    section('【D】docx —— 排版回归：软换行不拉伸 / 分割线不落地')
+
+    # --- 软换行段落必须左对齐 ---
+    parts = load(softbreak_path)
+    if parts:
+        doc = parse(parts, 'word/document.xml')
+        body = doc.find(W + 'body') if doc is not None else None
+        paras = body.findall(W + 'p') if body is not None else []
+
+        multi = [p for p in paras if list(p.iter(W + 'br'))]
+        ck('样本里有且仅有 1 个含软换行的段落', len(multi) == 1, len(multi))
+
+        for p in multi:
+            ppr = p.find(W + 'pPr')
+            jc = ppr.find(W + 'jc') if ppr is not None else None
+            val = jc.get(W + 'val') if jc is not None else None
+            ck('多行段落是左对齐（w:jc=left）', val == 'left', val)
+            ck('多行段落不是两端对齐（否则短行会被拉到版心宽）', val != 'both', val)
+            ck('软换行数正确（3 行 → 2 个 w:br）', len(list(p.iter(W + 'br'))) == 2,
+               len(list(p.iter(W + 'br'))))
+            text = all_text(p, W + 't')
+            ck('软换行段落三行文字都在（没被拆散或吞掉）',
+               '应急指挥部' in text and '总指挥' in text and '成员' in text, repr(text[:80]))
+
+        # 反面对照：单行正文段落仍然是两端对齐
+        both = [p for p in paras
+                if not list(p.iter(W + 'br'))
+                and (p.find(W + 'pPr') is not None and p.find(W + 'pPr').find(W + 'jc') is not None
+                     and p.find(W + 'pPr').find(W + 'jc').get(W + 'val') == 'both')]
+        ck('单行正文段落仍是两端对齐（没有把整篇都改左对齐）', len(both) == 1, len(both))
+
+    # --- 分割线不落地 ---
+    parts = load(gongwen_path)
+    if parts:
+        doc = parse(parts, 'word/document.xml')
+        if doc is not None:
+            ck('分割线不生成段落下边框（正文里没有 w:pBdr）',
+               len(list(doc.iter(W + 'pBdr'))) == 0)
+            text = all_text(doc, W + 't')
+            ck('分割线没有留下横线字符', '---' not in text, repr(text[:160]))
+            ck('分割线前后的正文都还在（只丢了那一行）',
+               '12345' in text and '本预案自发布之日起施行' in text, repr(text[-80:]))
+
+
+# ==================================================================== #
+# 纯文本 TXT
+# ==================================================================== #
+
+def check_txt(path):
+    """TXT 是给人粘贴用的：编码、换行、以及"有没有把 Markdown 符号一起带出来"都要卡死"""
+    section('【E】纯文本 TXT —— 编码 / 换行 / 语法符号')
+    if not os.path.exists(path):
+        ck('产物存在 case-content.txt', False, path)
         return
-    check_zip_hygiene(parts, 'xlsx')
+    raw = open(path, 'rb').read()
+    ck('case-content.txt 存在且非空', len(raw) > 200, len(raw))
+    ck('开头是 UTF-8 BOM（EF BB BF，记事本才不会糊中文）',
+       raw[:3] == b'\xef\xbb\xbf', raw[:6])
 
-    wb = parse(parts, 'xl/workbook.xml')
-    if wb is None:
-        return
-    sheets = wb.find(SS + 'sheets').findall(SS + 'sheet')
-    ck('工作表数量 = 1（内容）+ %d（表格）' % expect_tables, len(sheets) == 1 + expect_tables,
-       [s.get('name') for s in sheets])
-    names = [s.get('name') for s in sheets]
-    ck('第一个工作表名为「内容」', names and names[0] == '内容', names)
-    if expect_tables:
-        ck('表格工作表按「表格N」命名',
-           all(('表格' in n) for n in names[1:]), names[1:])
-
-    rels = parse(parts, 'xl/_rels/workbook.xml.rels')
-    byid = {}
-    if rels is not None:
-        for rel in rels.findall(RELS + 'Relationship'):
-            byid[rel.get('Id')] = rel.get('Target')
-    rid_attr = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
-    targets = []
-    for s in sheets:
-        targets.append(byid.get(s.get(rid_attr)))
-    ck('每个工作表的 r:id 都能解析到 worksheets/sheetN.xml',
-       all(t and t.startswith('worksheets/sheet') for t in targets), targets)
-    ck('workbook.rels 里声明了 styles.xml', 'styles.xml' in byid.values(), list(byid.values()))
-
-    # ---- 内容工作表 ----
-    s1 = parse(parts, 'xl/worksheets/sheet1.xml')
-    if s1 is None:
-        return
-    dim = s1.find(SS + 'dimension')
-    ck('内容表有 dimension', dim is not None and (dim.get('ref') or '').startswith('A1'),
-       dim.attrib if dim is not None else None)
-    cols = s1.find(SS + 'cols')
-    ck('内容表设了列宽（customWidth）',
-       cols is not None and cols.find(SS + 'col').get('customWidth') == '1')
-
-    cells = list(s1.iter(SS + 'c'))
-    ck('内容表有单元格', len(cells) > 0, len(cells))
-    str_cells = [c for c in cells if c.get('t') == 'inlineStr']
-    ck('字符串单元格用 inlineStr', len(str_cells) > 0, len(str_cells))
-    ok_space = all((c.find(SS + 'is/' + SS + 't') is not None) for c in str_cells)
-    ck('inlineStr 结构完整（is/t 齐全）', ok_space)
-    texts = [''.join((t.text or '') for t in c.iter(SS + 't')) for c in cells]
-    joined = '\n'.join(texts)
-    ck('内容里没有残留 Markdown 加粗符号', '**' not in joined, joined[:160])
-    # 数字：内容里放了 12345，必须是数字单元格才能直接求和
-    numeric = [c for c in cells if c.get('t') is None and c.find(SS + 'v') is not None]
-    ck('纯数字写成数字单元格（可直接求和，无文本绿三角）',
-       any((c.find(SS + 'v').text or '') == '12345' for c in numeric),
-       [(c.get('r'), c.find(SS + 'v').text) for c in numeric][:8])
-    # 前导零的编号不能被当成数字
-    ck('前导零编号保持文本（007 不被吞成 7）',
-       all(not ((c.find(SS + 'v') is not None) and (c.find(SS + 'v').text or '').lstrip('-').startswith('0')
-                and len((c.find(SS + 'v').text or '')) > 1) for c in numeric),
-       [(c.get('r'), c.find(SS + 'v').text) for c in numeric][:8])
-
-    # ---- 样式表索引对齐 ----
-    st = parse(parts, 'xl/styles.xml')
-    if st is not None:
-        xfs = st.find(SS + 'cellXfs').findall(SS + 'xf')
-        ck('cellXfs 数量与代码常量一致（10 个）', len(xfs) == 10, len(xfs))
-        if len(xfs) > 4:
-            ck('索引 3 是表头样式（带底色 fillId=2 + 边框 borderId=1）',
-               xfs[3].get('fillId') == '2' and xfs[3].get('borderId') == '1', xfs[3].attrib)
-            ck('索引 4 是数据单元格样式（带边框 borderId=1）',
-               xfs[4].get('borderId') == '1', xfs[4].attrib)
-        fonts = st.find(SS + 'fonts').findall(SS + 'font')
-        ck('定义了中文字体（charset=134，避免乱码）',
-           any(f.find(SS + 'charset') is not None and f.find(SS + 'charset').get('val') == '134' for f in fonts))
-        fills = st.find(SS + 'fills').findall(SS + 'fill')
-        ck('fill[0]/fill[1] 固定为 none / gray125（Excel 硬性约定）',
-           len(fills) >= 2
-           and fills[0].find(SS + 'patternFill').get('patternType') == 'none'
-           and fills[1].find(SS + 'patternFill').get('patternType') == 'gray125')
-
-    # ---- 表格工作表 ----
-    if expect_tables:
-        s2 = parse(parts, 'xl/worksheets/sheet2.xml')
-        if s2 is not None:
-            sv = s2.find(SS + 'sheetViews/' + SS + 'sheetView')
-            pane = sv.find(SS + 'pane') if sv is not None else None
-            ck('表格表冻结首行（pane ySplit=1）',
-               pane is not None and pane.get('ySplit') == '1',
-               pane.attrib if pane is not None else None)
-            cells2 = list(s2.iter(SS + 'c'))
-            styles_used = set(c.get('s') for c in cells2)
-            ck('表格里用到了表头样式（s=3）与数据样式（s=4）',
-               '3' in styles_used and '4' in styles_used, sorted(styles_used))
-            rows2 = s2.findall(SS + 'sheetData/' + SS + 'row')
-            head_row = rows2[0] if rows2 else None
-            head_cells = head_row.findall(SS + 'c') if head_row is not None else []
-            ck('表头行写满整行单元格', len(head_cells) >= 3, len(head_cells))
-            head_text = [''.join((t.text or '') for t in c.iter(SS + 't')) for c in head_cells]
-            ck('表头文字正确（含首列表头）', len(head_text) > 0 and head_text[0] == '姓名', head_text)
-            body_text = ' '.join(
-                ''.join((t.text or '') for t in c.iter(SS + 't'))
-                for r in rows2[1:] for c in r.findall(SS + 'c')
-            )
-            ck('数据行落到了独立单元格（不再是 | 拼接的一行文本）',
-               '液氯' in body_text and '剧毒' in body_text, body_text[:160])
-            cols2 = s2.find(SS + 'cols')
-            ck('表格列宽自适应（按内容设定）',
-               cols2 is not None and len(cols2.findall(SS + 'col')) >= 3,
-               len(cols2.findall(SS + 'col')) if cols2 is not None else None)
-
-
-def check_xlsx_no_table(path):
-    parts = load(path)
-    if not parts:
-        return
-    check_zip_hygiene(parts, 'xlsx-notable')
-    wb = parse(parts, 'xl/workbook.xml')
-    if wb is None:
-        return
-    sheets = wb.find(SS + 'sheets').findall(SS + 'sheet')
-    ck('无表格时只有「内容」一个工作表', len(sheets) == 1, [s.get('name') for s in sheets])
-    ck('无表格时不生成 sheet2.xml', 'xl/worksheets/sheet2.xml' not in parts)
+    text = raw.decode('utf-8-sig')
+    ck('换行全部是 CRLF（没有裸 LF）', '\n' not in text.replace('\r\n', ''), repr(text[:80]))
+    ck('没有残留 Markdown 加粗/斜体符号', '**' not in text and '~~' not in text)
+    ck('没有分割线横杠', '----------' not in text and '---' not in text, repr(text[:160]))
+    ck('没有残留的表格分隔行', '| ---' not in text)
+    ck('没有残留的代码围栏', '```' not in text)
+    ck('正文内容完整（关键句都在）',
+       '危险化学品' in text and '本预案自发布之日起施行' in text)
+    ck('表格被拍平成可读文本（表头与单元格都在）',
+       '危险特性' in text and '液氯' in text)
 
 
 # ==================================================================== #
@@ -488,15 +433,15 @@ def p(name):
 
 def main():
     print('=' * 68)
-    print('OOXML 产物校验（Python 标准库独立实现：zipfile 验 CRC，ElementTree 验 XML）')
+    print('导出产物校验（Python 标准库独立实现：zipfile 验 CRC，ElementTree 验 XML）')
     print('=' * 68)
 
     check_docx_gongwen(p('case-gongwen.docx'))
     check_docx_plain(p('case-plain.docx'))
     check_docx_empty(p('case-empty.docx'))
     check_docx_dirty(p('case-dirty.docx'))
-    check_xlsx_content(p('case-content.xlsx'), 1)
-    check_xlsx_no_table(p('case-notable.xlsx'))
+    check_layout_regressions(p('case-gongwen.docx'), p('case-softbreak.docx'))
+    check_txt(p('case-content.txt'))
 
     print('\n' + '=' * 68)
     if fails:

@@ -1,8 +1,8 @@
 /*
- * @Description: OOXML 公共工具（docx / xlsx 共用）
+ * @Description: OOXML 公共工具（Word 文档用）
  *
  * 只放三件事：XML 转义与非法字符清理、Office 的长度/字号单位换算、包内 part 拼装约定。
- * 不涉及任何具体文档结构 —— 那些在 docx.ts / xlsx.ts 里。
+ * 不涉及任何具体文档结构 —— 那些在 docx.ts 里。
  */
 
 /* ------------------------------ XML ------------------------------ */
@@ -81,7 +81,7 @@ export const FONT_SIZE = {
 
 /* ------------------------------ 包内路径 ------------------------------ */
 
-/** docx / xlsx 共用的 OOXML 命名空间 */
+/** docx 用的 OOXML 命名空间 */
 export const NS = {
   r: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
   ct: 'http://schemas.openxmlformats.org/package/2006/content-types',
@@ -190,6 +190,5 @@ export function appXml(appName: string, titlesOfParts: string[], groupLabel?: st
 
 /** Office MIME：给下载的 Blob 用。写错会导致浏览器把它当 zip 打开 */
 export const MIME = {
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 }

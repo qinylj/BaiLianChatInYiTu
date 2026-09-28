@@ -52,12 +52,12 @@ export const option = {
   stopText: '停止',
   exportText: '导出',
   /** 导出格式：html=渲染后的排版（默认）/ txt=渲染后的纯文本 / md=Markdown 原文 /
-   *  docx=Word 文档（默认按党政机关公文格式排版）/ xlsx=Excel 工作簿 */
+   *  docx=Word 文档（默认按党政机关公文格式排版） */
   exportFormat: 'html',
   /** 消息级导出按钮：显示在每条回答脚注的「重答」旁边，导出单条内容 */
   showMsgExport: true,
   exportWordText: '导出 Word',
-  exportExcelText: '导出 Excel',
+  exportTxtText: '导出 TXT',
   /**
    * Word 排版预设：
    *   gongwen —— 党政机关公文格式（GB/T 9704—2012）：上37下35左28右26mm、

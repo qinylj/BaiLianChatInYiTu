@@ -303,8 +303,9 @@
                           <path d="M13.5 2.3v3.6h-3.6" />
                         </svg>
                       </button>
-                      <!-- 导出单条回答为 Office 文件：浏览器里现场生成（零依赖手写 zip + OOXML），
-                           不走服务端。Word 默认按党政机关公文格式排版（见 docx.ts）。 -->
+                      <!-- 导出单条回答：Word（浏览器里现场生成，零依赖手写 zip + OOXML，
+                           默认按党政机关公文格式排版，见 docx.ts）/ 纯文本 .txt（见 exporter.ts）。
+                           TXT 不做结构转换，永远不丢内容，是"先存下来再说"的兜底出口。 -->
                       <template v-if="o.showMsgExport && m.role === 'assistant' && !m.pending && m.content">
                         <button
                           class="ac-act"
@@ -332,24 +333,28 @@
                         </button>
                         <button
                           class="ac-act"
-                          :class="{ active: exportedKey === m.id + '|xlsx' }"
+                          :class="{ active: exportedKey === m.id + '|txt' }"
                           :disabled="!!exportingId"
-                          :title="o.exportExcelText"
-                          @click="exportMessage(m, 'xlsx')"
+                          :title="o.exportTxtText"
+                          @click="exportMessage(m, 'txt')"
                         >
                           <svg
-                            v-if="exportedKey === m.id + '|xlsx'"
+                            v-if="exportedKey === m.id + '|txt'"
                             class="ac-ico"
                             viewBox="0 0 16 16"
                             aria-hidden="true"
                           >
                             <path d="M3.4 8.5 6.4 11.5 12.7 5.2" />
                           </svg>
-                          <!-- 表格网格 -->
+                          <!-- 纯文本：同一张纸，里面是几行文字（不画表格网格） -->
                           <svg v-else class="ac-ico" viewBox="0 0 16 16" aria-hidden="true">
-                            <rect x="2.6" y="3.2" width="10.8" height="9.6" rx="1.6" />
-                            <path d="M2.6 6.6h10.8" />
-                            <path d="M8 6.6v6.2" />
+                            <path
+                              d="M9.2 1.9H4.7A1.7 1.7 0 0 0 3 3.6v8.8a1.7 1.7 0 0 0 1.7 1.7h6.6a1.7 1.7 0 0 0 1.7-1.7V5.5z"
+                            />
+                            <path d="M9.2 1.9v3.6h3.8" />
+                            <path d="M5.4 8.3h5.2" />
+                            <path d="M5.4 10.5h5.2" />
+                            <path d="M5.4 12.7h3.1" />
                           </svg>
                         </button>
                       </template>
@@ -451,8 +456,8 @@ import { renderMarkdown as formatMessage, renderMarkdownToText } from './markdow
 // 复制：富文本 + 纯文本双形态，非安全上下文也有兜底（见 clipboard.ts）
 import { copyMessageText } from './clipboard'
 // 导出内容构造（纯函数，见 exporter.ts）：
-//   html / txt / md 产出字符串；docx / xlsx 产出字节（公文 Word、Excel 工作簿，见 docx.ts / xlsx.ts）
-import { buildExport, buildOfficeExport } from './exporter'
+//   html / txt / md 产出字符串；docx 产出字节（公文 Word，见 docx.ts）
+import { buildExport, buildOfficeExport, buildMessageText } from './exporter'
 // 存盘：Blob + <a download>，非安全上下文（大屏 http 内网 IP）也能用（见 download.ts）
 import { saveFile } from './download'
 import {
@@ -1372,7 +1377,7 @@ const vote = async (msg: ChatMessage, v: 'LIKE' | 'DISLIKE') => {
  *   html（默认）= 渲染后的排版，自包含单文件，双击可看 / 可直接粘进 Word
  *   txt  = 渲染后的纯文本，带 BOM（Windows 记事本不糊中文）
  *   md   = 原始 Markdown 源码，留档用
- *   docx = 公文格式 Word，xlsx = Excel 工作簿（内容是字节，不是字符串）
+ *   docx = 公文格式 Word（内容是字节，不是字符串）
  * 具体格式由 option.exportFormat 决定。
  */
 const exportConversation = () => {
@@ -1388,7 +1393,7 @@ const exportConversation = () => {
 }
 
 /* ------------------------------------------------------------------ *
- * 消息级导出（脚注里的「导出 Word / 导出 Excel」按钮）
+ * 消息级导出（脚注里的「导出 Word / 导出 TXT」按钮）
  * ------------------------------------------------------------------ */
 
 /** 正在生成文件的消息 id：生成是同步的，但长文档要几十毫秒，用状态兜住重复点击 */
@@ -1397,28 +1402,35 @@ const exportingId = ref('')
 const exportedKey = ref('')
 
 /**
- * 把单条回答导出成 Office 文件。
+ * 把单条回答导出成文件。
  *
- * 两条链路都是**在浏览器里现场生成**：零依赖手写 zip + OOXML（见 zip.ts / docx.ts / xlsx.ts），
- * 不经过服务端，也不引任何第三方 Office 库 —— 运行组件是要跟着大屏一起加载的。
+ *   docx —— 浏览器里现场生成：零依赖手写 zip + OOXML（见 zip.ts / docx.ts），
+ *           不经过服务端，也不引任何第三方 Office 库 —— 运行组件是要跟着大屏一起加载的。
+ *   txt  —— 就是"渲染后的纯文本"（见 exporter.buildMessageText），不做结构转换，
+ *           所以永远不会因为某段 Markdown 没被认出来而丢内容，是"先存下来再说"的兜底。
  *
- * 文档标题这里不指定：exporter 会取正文里第一个标题当标题、并把那一行从正文摘掉，
+ * Word 的文档标题这里不指定：exporter 会取正文里第一个标题当标题、并把那一行从正文摘掉，
  * 否则同一句话会先以二号小标宋居中显示一次、下面又以一级标题显示一次，看着像出错。
- * 正文里没有标题时才退化成"首段前 24 字"，再没有就用"文档"。
+ * 正文里没有标题时才退化成"首段前 24 字"，再没有就用"文档"（TXT 文件名走同一套规则）。
  */
-const exportMessage = (msg: ChatMessage, kind: 'docx' | 'xlsx') => {
+const exportMessage = (msg: ChatMessage, kind: 'docx' | 'txt') => {
   if (exportingId.value) return
   const text = msg.content || ''
   if (!text) return
   exportingId.value = msg.id
   try {
-    const res = buildOfficeExport(kind, text, {
-      preset: o.value.docxPreset,
-      titleFont: o.value.docxTitleFont,
-      meta: [`导出时间：${new Date().toLocaleString('zh-CN')}`]
-    })
-    if (!res.bytes || !res.bytes.length) throw new Error('empty')
-    if (!saveFile(res.fileName, res.bytes, res.mime)) throw new Error('blocked')
+    const res =
+      kind === 'txt'
+        ? buildMessageText(text)
+        : buildOfficeExport(text, {
+            preset: o.value.docxPreset,
+            titleFont: o.value.docxTitleFont,
+            meta: [`导出时间：${new Date().toLocaleString('zh-CN')}`]
+          })
+    // Word 给的是字节，TXT 给的是字符串 —— 统一交给 saveFile 落盘
+    const data = res.bytes && res.bytes.length ? res.bytes : res.content
+    if (!data.length) throw new Error('empty')
+    if (!saveFile(res.fileName, data, res.mime)) throw new Error('blocked')
     exportedKey.value = `${msg.id}|${kind}`
     window.setTimeout(() => {
       if (exportedKey.value === `${msg.id}|${kind}`) exportedKey.value = ''
@@ -1427,7 +1439,7 @@ const exportMessage = (msg: ChatMessage, kind: 'docx' | 'xlsx') => {
     // 大屏常在 iframe 里预览，父页面没给 allow-downloads 时点击是静默无效的 ——
     // 这种情况必须说出来，否则用户以为按钮坏了（见 download.ts 顶部说明）
     showToast(
-      (kind === 'xlsx' ? '导出 Excel 失败' : '导出 Word 失败') +
+      (kind === 'txt' ? '导出 TXT 失败' : '导出 Word 失败') +
         '：浏览器拦截了下载，试试在新窗口打开大屏，或先复制内容'
     )
   } finally {
@@ -1570,7 +1582,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.3'
+  version: '1.0.4'
 }
 </script>
 

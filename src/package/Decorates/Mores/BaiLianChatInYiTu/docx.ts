@@ -12,6 +12,14 @@
  * 为什么手写 OOXML 而不是用 docx 库：运行组件零依赖（详见 zip.ts 顶部的说明）。
  * OOXML 只要 part 齐全、XML 合法、rels 对得上，Word / WPS / LibreOffice 都能打开。
  *
+ * ★ 两个"看起来能跑、打开就露馅"的排版坑，都在这里被刻意规避：
+ *   1. 两端对齐 + 软换行：模型很爱写"一句一行"的短句块，Markdown 里它们属于**同一个**
+ *      段落（`para.text` 里的 \n），转成 Word 就是同一个 <w:p> 里的 <w:br/>。
+ *      而 Word 的两端对齐只放过段落最后一行 —— 前面每一行都会被拉到版心宽度，
+ *      排成「应　　急　　指　　挥　　部」。所以凡是有软换行的段落一律降级为左对齐。
+ *   2. 分割线：`---` 在 Markdown 里是分割线，在公文里什么都不是。直接丢弃，
+ *      不要转成"带下边框的空段落"（那会得到一条孤零零的横线，还占一行高度）。
+ *
  * ★ 两个最容易写出"文件损坏"的地方，都在这里被刻意规避：
  *   1. 元素顺序：OOXML 的 w:pPr / w:rPr / w:tblPr 的**子元素顺序是 schema 规定的**，
  *      顺序错了 Word 直接报"内容有问题"。下面每一处都按 CT_* 的顺序拼。
@@ -254,7 +262,13 @@ const paraXml = (content: string, o?: ParaOpts): string => {
     if (ind.length) pPr += `<w:ind ${ind.join(' ')}/>`
   }
 
-  if (p.jc) pPr += `<w:jc w:val="${p.jc}"/>`
+  /* ★ 段内有软换行（<w:br/>）时不能用两端对齐。
+     Word 的"两端对齐（both）"只放过**段落最后一行**，而软换行只结束"行"不结束"段落"，
+     于是"应急指挥部"、"总指挥：企业主要负责人"这种独占一行的短句会被硬拉到版心宽度，
+     排成「应　　急　　指　　挥　　部」——这是最容易被当成排版事故的一种。
+     这类内容本来就是一句一行的短句集合（模型很爱这么写），左对齐才是它该有的样子。 */
+  const jc = p.jc === 'both' && content.indexOf('<w:br/>') >= 0 ? 'left' : p.jc
+  if (jc) pPr += `<w:jc w:val="${jc}"/>`
   if (p.rPr) pPr += rPrXml(p.rPr)
 
   return `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${content}</w:p>`
@@ -485,10 +499,10 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
       continue
     }
 
-    if (b.type === 'hr') {
-      out.push(paraXml('', { bottomBorder: true, ind: { firstLineChars: 0 }, line: layout.line, rPr: body }))
-      continue
-    }
+    /* 分割线（--- / *** / ___）：整块丢掉。
+       公文里没有这种东西（层次靠"一、（一）1."和字体区分），画一条横线只会让版面
+       显得松散；而且它容易和"页脚页码的一字线"、"表格上边框"混成同一种观感。 */
+    if (b.type === 'hr') continue
   }
 
   return out.join('')

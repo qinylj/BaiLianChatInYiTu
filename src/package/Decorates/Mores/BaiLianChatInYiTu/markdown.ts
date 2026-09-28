@@ -307,6 +307,7 @@ export const stripInline = (s: string) => {
  * 把 Markdown 渲染成"给人读的纯文本"。
  * 与 renderMarkdown 同一套块级规则：标题 / 列表（可嵌套）/ 引用 / 分割线 /
  * 代码块（原样保留）/ 表格 / 段落。
+ * 与 HTML 版唯一的差别是分割线：**不输出横杠**，只留一个空行（见下面 hr 分支）。
  */
 export function renderMarkdownToText(raw: string): string {
   const src = String(raw == null ? '' : raw).replace(/\r\n?/g, '\n')
@@ -332,10 +333,11 @@ export function renderMarkdownToText(raw: string): string {
       continue
     }
 
-    // 分割线（先于列表判断，否则 `---` 会被当成空列表项）
+    /* 分割线（先于列表判断，否则 `---` 会被当成空列表项）：
+       文字版里**不画**那排横杠 —— 粘贴到微信 / Word / 公文里，"----------" 是纯噪音，
+       段落之间的空行已经把层次说清楚了。这一行仍然要吃掉，不能落到列表分支去。 */
     if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(ln)) {
       blank()
-      out.push('----------')
       i++
       continue
     }
@@ -450,7 +452,7 @@ const isBlockStart = (ln: string): boolean => {
 }
 
 /* ==================================================================== *
- * 结构化解析：给 Word / Excel 导出用
+ * 结构化解析：给 Word 导出用
  *
  * 上面两个渲染器输出的是 **字符串**（HTML / 纯文本），而生成 Office 文档需要的是
  * **结构**：段落是什么级别、哪些文字加粗、表格有几行几列。
@@ -634,7 +636,7 @@ export function parseInlineRuns(src: string): MdRun[] {
   return out
 }
 
-/** runs → 一行纯文字（xlsx 单元格、docx 里不需要结构时的兜底） */
+/** runs → 一行纯文字（表格列宽估算、不需要保留结构时的兜底） */
 export const runsToText = (runs: MdRun[]): string => runs.map(r => r.text).join('')
 
 /** 块级解析：与 renderMarkdownToText 同一套规则，只把结果留成结构 */

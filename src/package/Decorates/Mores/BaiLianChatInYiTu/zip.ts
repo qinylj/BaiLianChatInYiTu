@@ -1,7 +1,7 @@
 /*
  * @Description: 零依赖 ZIP 写入器（浏览器 / Node 通用）
  *
- * 为什么手写：.docx 与 .xlsx 本质都是 zip 包，而运行组件要保持**零第三方依赖**
+ * 为什么手写：.docx 本质是 zip 包，而运行组件要保持**零第三方依赖**
  * （jszip / fflate / docx / exceljs 随便一个进来就是几十到几百 KB，
  *   而大屏组件是要跟着页面加载的，不能为"导出"这一个功能背这么多体积）。
  *
@@ -85,7 +85,7 @@ export interface ZipEntry {
 
 /**
  * 组装 zip。
- * @param entries 包内文件，顺序会被保留（docx/xlsx 对顺序不敏感，但 [Content_Types].xml 放第一更符合习惯）
+ * @param entries 包内文件，顺序会被保留（docx 对顺序不敏感，但 [Content_Types].xml 放第一更符合习惯）
  * @param when    zip 内记录的时间戳；不传则用当前时间
  */
 export function buildZip(entries: ZipEntry[], when?: Date): Uint8Array {

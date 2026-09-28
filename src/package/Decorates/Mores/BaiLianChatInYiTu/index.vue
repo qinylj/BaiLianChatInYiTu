@@ -1448,6 +1448,8 @@ const exportKindLabel: Record<MsgExportKind, string> = {
  *
  * Word 的文档标题这里不指定：exporter 会取正文里第一个标题当标题、并把那一行从正文摘掉，
  * 否则同一句话会先以二号小标宋居中显示一次、下面又以一级标题显示一次，看着像出错。
+ * 摘掉之后标题**留在它原本的位置**（不硬提到最前）—— 模型常先写一句「以下是…：」
+ * 再上正文标题，那句话原位排在标题上面才顺；标题下面紧跟的「（2025-2027年）」当副标题。
  * 正文里没有标题时才退化成"首段前 24 字"，再没有就用"文档"
  * （TXT / MD 的文件名走同一套规则，同一条回答导出的三个文件前缀一致）。
  */
@@ -1619,7 +1621,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.6'
+  version: '1.0.7'
 }
 </script>
 

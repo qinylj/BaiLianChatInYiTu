@@ -12,6 +12,7 @@ zip 的 CRC 由 zipfile 独立算一遍、XML 由 ElementTree 独立解析一遍
 """
 
 import os
+import re
 import sys
 import zipfile
 import xml.etree.ElementTree as ET
@@ -527,6 +528,76 @@ def check_ordinal(path):
        sorted(used))
 
 
+def check_frame(path):
+    """标题块：副标题 / 前言位置 / emoji 清理（独立复算一遍）"""
+    section('【H】docx —— 标题块（副标题 / 前言位置 / emoji 清理）')
+    parts = load(path)
+    if not parts:
+        return
+    check_zip_hygiene(parts, 'docx-frame')
+    doc = parse(parts, 'word/document.xml')
+    if doc is None:
+        return
+    body = doc.find(W + 'body')
+    paras = body.findall(W + 'p') if body is not None else []
+    ck('有正文段落', len(paras) >= 5, len(paras))
+
+    def para_font(p):
+        r = p.find(W + 'r')
+        rp = r.find(W + 'rPr') if r is not None else None
+        f = rp.find(W + 'rFonts') if rp is not None else None
+        return f.get(W + 'eastAsia') if f is not None else None
+
+    def para_jc(p):
+        pr = p.find(W + 'pPr')
+        j = pr.find(W + 'jc') if pr is not None else None
+        return j.get(W + 'val') if j is not None else None
+
+    texts = [all_text(p, W + 't') for p in paras]
+    i_lead = next((i for i, t in enumerate(texts) if t.startswith('以下是为长寿区制定的')), -1)
+    i_title = next((i for i, t in enumerate(texts) if t == '长寿区数字重庆建设三年行动计划'), -1)
+    i_sub = next((i for i, t in enumerate(texts) if t == '（2025-2027年）'), -1)
+
+    ck('前言排在标题上面', i_lead >= 0 and i_title >= 0 and i_lead < i_title,
+       {'lead': i_lead, 'title': i_title, 'head': texts[:4]})
+    ck('副标题紧排在标题下面', i_title >= 0 and i_sub == i_title + 1,
+       {'title': i_title, 'sub': i_sub, 'head': texts[:4]})
+    ck('前言是正文字体（方正仿宋_GBK）',
+       i_lead >= 0 and para_font(paras[i_lead]) == '方正仿宋_GBK',
+       para_font(paras[i_lead]) if i_lead >= 0 else '(缺失)')
+    ck('前言是两端对齐的正文段', i_lead >= 0 and para_jc(paras[i_lead]) == 'both',
+       para_jc(paras[i_lead]) if i_lead >= 0 else '(缺失)')
+    ck('标题是方正小标宋_GBK 居中',
+       i_title >= 0 and para_font(paras[i_title]) == '方正小标宋_GBK' and para_jc(paras[i_title]) == 'center',
+       (para_font(paras[i_title]), para_jc(paras[i_title])) if i_title >= 0 else '(缺失)')
+    ck('副标题是方正楷体_GBK 居中',
+       i_sub >= 0 and para_font(paras[i_sub]) == '方正楷体_GBK' and para_jc(paras[i_sub]) == 'center',
+       (para_font(paras[i_sub]), para_jc(paras[i_sub])) if i_sub >= 0 else '(缺失)')
+    ck('副标题只出现一次', texts.count('（2025-2027年）') == 1,
+       [t for t in texts if '2025' in t])
+
+    joined = '|'.join(texts)
+    ck('emoji 不进 Word（✅ 已清掉）', '✅' not in joined, [t for t in texts if '✅' in t])
+    ck('emoji 与文字之间的空格也没留下',
+       any(t.startswith('政务服务：区级事项') for t in texts), [t for t in texts if '政务服务' in t])
+    ck('引号旁边的空格清掉（打造 “…” 品牌 → 无缝）',
+       any('打造“数字长寿·智联江城”品牌。到 2027 年实现：' in t for t in texts),
+       [t for t in texts if '打造' in t])
+    ck('有序列表序号后面不留空格（1. 算力网络 → 1.算力网络）',
+       '1.算力网络：新建 2 个边缘计算节点。' in texts, [t for t in texts if '算力网络' in t])
+
+    dirty = [t for t in texts if '  ' in t or '\u3000' in t]
+    ck('全篇没有连续空格 / 全角空格', not dirty, dirty)
+    emo = re.compile('[\\u2600-\\u27BF\\u2B50-\\u2B55]|[\\uD83C-\\uD83E][\\uDC00-\\uDFFF]')
+    ck('全篇没有 emoji 残留', not any(emo.search(t) for t in texts),
+       [t for t in texts if emo.search(t)])
+
+    used = set(f for f in (para_font(p) for p in paras) if f)
+    ck('字体只用了公文允许的四种',
+       used <= {'方正小标宋_GBK', '方正黑体_GBK', '方正楷体_GBK', '方正仿宋_GBK'},
+       sorted(used))
+
+
 def main():
     print('=' * 68)
     print('导出产物校验（Python 标准库独立实现：zipfile 验 CRC，ElementTree 验 XML）')
@@ -538,6 +609,7 @@ def main():
     check_docx_dirty(p('case-dirty.docx'))
     check_layout_regressions(p('case-gongwen.docx'), p('case-softbreak.docx'))
     check_ordinal(p('case-ordinal.docx'))
+    check_frame(p('case-frame.docx'))
     check_txt(p('case-content.txt'))
     check_md(p('case-content.md'))
 

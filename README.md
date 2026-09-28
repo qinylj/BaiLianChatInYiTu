@@ -42,8 +42,12 @@
     首行缩进 2 字符，标题方正小标宋_GBK 二号居中，页脚「— 1 —」页码；
     正文的**层次按行首序数**自动换字体 ——「一、」方正黑体_GBK、「（一）」方正楷体_GBK、
     「1.」与「（1）」方正仿宋_GBK（与正文同），序数可以越级使用；
+    标题下面紧跟的、整行被圆括号包住的一块（如「（2025-2027年）」）当作**副标题**，
+    用方正楷体_GBK 三号居中排在标题正下方；
     Markdown 表格落成 **Word 真表格**（表头跨页自动重复、列宽按内容分配、
     总宽正好铺满版心，不会因为某列内容长就把版心撑歪）。也可切换成「普通文档」预设
+  - **标题块按原文顺序落位**：模型常先写一句引语（「以下是为…：」）再上正文标题，
+    那句话原位留在**标题上面**、用正文的字体字号，不会被标题挤到后面去
   - **TXT 就是渲染后的纯文本**（带 BOM + CRLF）：不做结构转换，永远不丢内容，是"先存下来再说"的出口
   - **MD 是渲染前的原数据**：与模型返回的 Markdown **逐字节相同**（不转结构、不改换行、不加 BOM），
     留给二次加工 / diff / 喂给别的工具
@@ -56,7 +60,13 @@
   - 排版细节二：Markdown 分割线 `---` 直接丢弃，不在公文里凭空画一条横线
   - 排版细节三：模型用空格摆版式留下的**多余空格会被清掉**（`总指挥：   企业主要负责人`、
     `第一章　　总则`），但中英文之间、数字前后的空格是正常写法（`依据 GB/T 9704 标准`、`共 30 人`），
-    行内代码里的空格更是内容 —— 一律不动。**MD 导出是唯一例外**，那里给的是渲染前的原数据，一个字符都不改
+    行内代码里的空格更是内容 —— 一律不动。
+    另外两类容易漏的也一并处理了：**中文标点旁边的空格**（`打造 “数字长寿” 品牌` 里空格贴着弯引号，
+    光按"汉字之间去空格"清不掉）与**层次序数后的空格**（`1. 算力网络` → `1.算力网络`，
+    公文里序号与文字之间本来就不留空格）
+  - 排版细节四：**emoji 图标不进导出物**（`✅ 政务服务：…` → `政务服务：…`）。
+    但**箭头和几何图形留着** —— `→`、`●` 在中文技术文里是承载语义的符号，删掉就把意思改坏了。
+    **MD 导出是唯一例外**，那里给的是渲染前的原数据，一个字符都不改；屏幕上正在显示的那份也不动
 - 输入区支持附件入口（聚焦时出现）、Enter 发送 / Shift+Enter 换行
 
 **左侧栏**
@@ -113,11 +123,11 @@ BaiLianChatInYiTu/
 ├── tools/
 │   ├── bump-version.cjs        # 版本号命令行：查看 / 自增 / 指定
 │   ├── pack.cjs                # 把 dist 打成带版本的交付 zip（零依赖 zip 写入）
-│   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"+ 空格清理（86 项，无需浏览器）
+│   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"+ 空格/emoji 清理（101 项，无需浏览器）
 │   ├── verify-copy-clipboard.cjs  # 真浏览器自检：剪贴板里到底是渲染后内容还是 Markdown 原文
-│   ├── verify-office-export.cjs   # 导出自检（106 项：行内交叉一致性 / 排版回归 / 层次序数 / zip / 编排）
-│   ├── verify_ooxml.py            # Python 标准库独立复验产物（105 项：zipfile 验 CRC、ElementTree 验 XML）
-│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（42 项）
+│   ├── verify-office-export.cjs   # 导出自检（127 项：行内交叉一致性 / 排版回归 / 层次序数 / 标题块 / zip / 编排）
+│   ├── verify_ooxml.py            # Python 标准库独立复验产物（124 项：zipfile 验 CRC、ElementTree 验 XML）
+│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（50 项）
 └── src/
     ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（16 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
@@ -208,9 +218,9 @@ npm run pack         # 已编译过，只想重新打 zip
 把 TS 现场转成可执行代码），也不需要 webpack dev server：
 
 ```bash
-node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本" + 空格清理，86 项，纯 Node
-node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / 层次序数 / TXT / MD，106 项 + Python 交叉验证 105 项
-node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，42 项
+node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本" + 空格/emoji 清理，101 项，纯 Node
+node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / 层次序数 / 标题块 / TXT / MD，127 项 + Python 交叉验证 124 项
+node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，50 项
 node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 9 项 / CHROME_UI=1 共 20 项）
 ```
 

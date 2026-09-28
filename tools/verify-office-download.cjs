@@ -44,10 +44,16 @@ const CHROME_CANDIDATES = [
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 const findBrowser = () => CHROME_CANDIDATES.find(p => p && fs.existsSync(p)) || null
 
+/* 样本照着一份真实导出稿的样子写：模型先来一句引语再上正文标题、标题下面带副标题、
+   正文里夹着 emoji 与"用空格摆版式"的写法。文件名仍取**正文首个标题**，与引语无关。 */
 const SAMPLE = [
+  '以下是为本单位编制的**危化品泄漏应急处置预案框架**（约1000字），可直接用于报送或存档：',
+  '',
   '# 危险化学品事故应急预案',
   '',
-  '本预案适用于本单位**危险化学品**突发泄漏事故的应急处置。',
+  '（2025-2027年）',
+  '',
+  '本预案适用于本单位**危险化学品**突发泄漏事故的应急处置，依据“安全生产法” 与 “危化品管理条例” 编制。',
   '',
   '一、总体要求',
   '',
@@ -56,6 +62,10 @@ const SAMPLE = [
   '应急指挥部',
   '总指挥：   企业主要负责人',
   '成员：  生产、安全、环保、医疗等部门负责人',
+  '',
+  '✅ 一级响应：由应急指挥部统一指挥，30 分钟内到位。',
+  '',
+  '1. 先期处置：现场人员立即撤离至上风向。',
   '',
   '- 液氯、硫酸等剧毒强腐蚀品的储存环节',
   '- 生产装置区的泄漏事故',
@@ -461,6 +471,25 @@ async function main() {
         check('第二层「（一）指导思想」用方正楷体_GBK',
           /方正楷体_GBK/.test(paraWith('（一）指导思想')))
 
+        /* 标题块：引语留在标题上面、副标题（（2025-2027年））用楷体紧排在标题下面 */
+        const iLead = doc.indexOf('以下是为本单位编制的')
+        /* 标题那一行的文本节点结尾 —— 引语里写的是"危化品泄漏应急处置预案框架"，不会撞上 */
+        const iTitle = doc.indexOf('危险化学品事故应急预案</w:t>')
+        check('模型写的引语留在标题上面（标题没被硬提到最前）',
+          iLead >= 0 && iTitle >= 0 && iLead < iTitle, { iLead, iTitle })
+        check('副标题「（2025-2027年）」用方正楷体_GBK 居中',
+          /方正楷体_GBK/.test(paraWith('（2025-2027年）')) && /w:val="center"/.test(paraWith('（2025-2027年）')),
+          paraWith('（2025-2027年）').slice(0, 120))
+
+        /* emoji 与零散空格：都要在落盘产物里消失 */
+        check('emoji 不进 Word（✅ 已清掉）', doc.indexOf('✅') < 0)
+        check('emoji 清掉后剩下的文字仍在（一级响应…）',
+          doc.indexOf('一级响应：由应急指挥部统一指挥') >= 0)
+        check('引号旁边的空格清掉（依据“安全生产法” 与 …）',
+          doc.indexOf('依据“安全生产法”与“危化品管理条例”编制。') >= 0)
+        check('有序列表序号后面不留空格（1. 先期处置 → 1.先期处置）',
+          doc.indexOf('1.先期处置：现场人员立即撤离至上风向。') >= 0)
+
         /* 多余空格：落盘产物里必须已经被清掉（只看 <w:t> 里的真实文本，不看 XML 排版） */
         const tNodes = (doc.match(/<w:t[^>]*>[\s\S]*?<\/w:t>/g) || []).map(t =>
           t.replace(/<[^>]+>/g, '')
@@ -470,12 +499,16 @@ async function main() {
         check('正文文本里没有连续两个空格、也没有全角空格（U+3000）',
           !tNodes.some(t => /  |\u3000/.test(t)), tNodes.filter(t => /  |\u3000/.test(t)))
 
-        /* 落盘产物上再验一次本轮修复：手动换行符换成了回车、段落仍是两端对齐 */
+        /* 落盘产物上再验一次本轮修复：手动换行符换成了回车、段落仍是两端对齐。
+           ★ 这里按"整段文字恰好等于"来筛 —— 早先按 /应急指挥部/ 之类的子串筛，
+             样本里新加的「由应急指挥部统一指挥」会一起被捞进来，段数就对不上了。 */
         check('手动换行符换成了回车（落盘正文里 <w:br/> 数为 0）', doc.indexOf('<w:br/>') < 0)
+        const paraText = p =>
+          (p.match(/<w:t[^>]*>[\s\S]*?<\/w:t>/g) || []).map(t => t.replace(/<[^>]+>/g, '')).join('')
         const shortParas = doc
           .split('<w:p>')
           .slice(1)
-          .filter(p => /应急指挥部|总指挥：企业主要负责人|成员：生产/.test(p))
+          .filter(p => /^(应急指挥部|总指挥：企业主要负责人|成员：生产、安全、环保、医疗等部门负责人)$/.test(paraText(p)))
         check('落盘的三个短句各自成一段（不再是同一段里的软换行）',
           shortParas.length === 3, shortParas.length)
         check('这三段都是两端对齐（字距不会被拉开）',
@@ -520,6 +553,8 @@ async function main() {
       check('多余空格也被清掉（TXT 与 Word 同一套口径）',
         text.indexOf('总指挥：企业主要负责人') >= 0 && !/  /.test(text),
         JSON.stringify((text.match(/.*总指挥.*/g) || []).slice(0, 2)))
+      check('emoji 同样不进 TXT（✅ 已清掉）', text.indexOf('✅') < 0,
+        JSON.stringify((text.match(/.*一级响应.*/g) || []).slice(0, 1)))
       check('表格被拍平成可读文本（表头与单元格都在）',
         /姓名 \| 危险特性/.test(text) && /液氯/.test(text))
     }
@@ -557,6 +592,9 @@ async function main() {
       check('★ 多余空格原样保留（渲染**前**是原数据，绝不清理）',
         buf.toString('utf8').indexOf('总指挥：   企业主要负责人') >= 0,
         JSON.stringify((buf.toString('utf8').match(/.*总指挥.*/g) || []).slice(0, 1)))
+      check('★ emoji 原样保留（原数据一个字符都不改，连图标也是）',
+        buf.toString('utf8').indexOf('✅ 一级响应') >= 0,
+        JSON.stringify((buf.toString('utf8').match(/.*一级响应.*/g) || []).slice(0, 1)))
     }
 
     /* ---------------- D. 三个文件都留下了 ---------------- */

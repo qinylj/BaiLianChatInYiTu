@@ -17,6 +17,15 @@
  *   模型爱把这些写成普通段落（甚至和正文挤在同一个 Markdown 段落里），
  *   所以检测放在"块 → 段落"的**每一行**上，见 ordinalLevel()。
  *
+ * ★ 标题块由三段拼成，而且**不一定排在文档第一行**：
+ *     lead（标题之前的正文块，模型写的"以下是为…："）
+ *     → 标题（二号小标宋居中）
+ *     → 副标题（整行被圆括号包住的那块，如「（2025-2027年）」，三号楷体居中，见 isSubtitle）
+ *     → meta（导出时间等信息行）
+ *   模型常先写一句引语再上正文标题。早先这里把标题硬提到最前，那句引语就被挤到标题
+ *   后面去了（用户反馈「顺序颠倒了」「这段话应该是在标题上面」）。现在标题留在它原本
+ *   的位置，引语原位排在上面 —— 位置由调用方算好传进来（见 exporter.ts）。
+ *
  * ★ 两个"看起来能跑、打开就露馅"的排版坑，都在这里被刻意规避：
  *   1. 手动换行符（Shift+Enter，↓）不能被两端对齐：模型很爱写"一句一行"的短句块，
  *      Markdown 里它们属于**同一个**段落（`para.text` 里的 \n）。若照直转成同一个
@@ -58,6 +67,15 @@ export type DocxPreset = 'gongwen' | 'plain'
 export interface DocxOptions {
   /** 文档大标题（居中，二号小标宋） */
   title?: string
+  /** 副标题（`（2025-2027年）` 这类，居中，三号楷体，紧排在标题下方） */
+  subtitle?: string
+  /**
+   * 标题**之前**的内容（正文标题出自正文中间时，它前面那些块）。
+   *
+   * 模型常先写一句"以下是为…编制的专项规划框架："再上正文标题。这句话是它的话、
+   * 不属于公文正文，但也不该被丢掉 —— 原位排在标题上面，用正文字体字号（见 exporter）。
+   */
+  lead?: MdBlock[]
   preset?: DocxPreset | string
   /** 标题字体，默认随预设（公文=方正小标宋_GBK） */
   titleFont?: string
@@ -175,6 +193,21 @@ export const ordinalLevel = (text: string): number => {
 /** 层次 → 字体。第三、四层同为仿宋（与正文同字体，靠序数本身区分层次） */
 const levelStyle = (layout: Layout, level: number): { font: string; bold: boolean } =>
   level <= 1 ? layout.h1 : level === 2 ? layout.h2 : layout.h3
+
+/**
+ * 副标题判定：**整行被圆括号包住**的那一块（`（2025-2027年）`、`（征求意见稿）`、`（试行）`）。
+ *
+ * 公文里这行就是标题下面的副标题，字号与正文同为三号、字体换成楷体。
+ * 模型十有八九会把它写成标题下面紧挨着的一个普通段落，不认出来就会混在正文里
+ * （用户反馈：「（2025-2027年）应该是副标题」，见 exporter 里的取用位置）。
+ *
+ * ★ 必须排掉层次序数：`（一）`、`（1）` 也是被括号包住的，但它们是层次不是副标题。
+ */
+export const isSubtitle = (text: string): boolean => {
+  const s = String(text == null ? '' : text).replace(/[*_`~\s]/g, '')
+  if (!/^[（(][^（）()]{1,24}[）)]$/.test(s)) return false
+  return ordinalLevel(s) === 0
+}
 
 /* ==================================================================== *
  * XML 片段生成
@@ -546,7 +579,10 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
       // 列表：公文里俗称"层次序数"，这里保持和渲染页一致的层级观感 ——
       // 每级左缩进 2 字符，并让序号悬挂在文字外侧，长条目换行后与首行对齐
       const left = 200 + b.level * 200
-      const marker = b.ordered ? `${b.index}. ` : '· '
+      /* ★ 序号后面**不留空格**：公文的第三层写作「1.内容」，序号与文字之间没有空格。
+         模型写的 `1. 算力网络` 里那个空格是 Markdown 列表语法的分隔符，
+         不是内容的一部分；留在这里导出就是"多余的空格"（用户截图里圈的就是它）。 */
+      const marker = b.ordered ? `${b.index}.` : '· '
       const lines = splitLines(b.text)
       // 续行与首行同字体：续行是这一条的内容，不该因为它没有序数就换回正文字体
       const st = lineStyle(lines[0], body)
@@ -639,6 +675,10 @@ function documentXml(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pla
   const body: RunStyle = { eastAsia: layout.body.font, latin: layout.latin, size: layout.body.size }
   const parts: string[] = []
 
+  /* 标题之前的内容（模型写的那句"以下是…"）：原位排在标题上面，用正文字体字号。
+     没有它时（标题本就在正文最前）这一段什么都不做。 */
+  if (opts.lead && opts.lead.length) parts.push(blocksToBody(opts.lead, layout, preset))
+
   /* 标题（二号小标宋居中）与信息行 */
   if (opts.title) {
     const titleStyle: RunStyle = {
@@ -646,15 +686,34 @@ function documentXml(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pla
       latin: layout.latin,
       size: layout.title.size
     }
-    // 公文标题与正文之间空一行（afterLines=100 即 1 行）
+    // 公文标题与正文之间空一行（afterLines=100 即 1 行）；
+    // 有副标题时段后留白交给副标题那一段，两段之间才不会空出两行
     parts.push(
       paraXml(runXml(opts.title, titleStyle), {
         jc: 'center',
         ind: { firstLineChars: 0 },
         line: layout.line,
         beforeLines: preset === 'gongwen' ? 50 : 0,
-        afterLines: 50,
+        afterLines: opts.subtitle ? 0 : 50,
         rPr: titleStyle
+      })
+    )
+  }
+
+  /* 副标题：紧排在大标题下面，居中、三号楷体（与「（一）」同一档字体，但字号随正文） */
+  if (opts.subtitle) {
+    const subStyle: RunStyle = {
+      eastAsia: preset === 'gongwen' ? layout.h2.font : '楷体',
+      latin: layout.latin,
+      size: layout.body.size
+    }
+    parts.push(
+      paraXml(runXml(opts.subtitle, subStyle), {
+        jc: 'center',
+        ind: { firstLineChars: 0 },
+        line: layout.line,
+        afterLines: 50,
+        rPr: subStyle
       })
     )
   }

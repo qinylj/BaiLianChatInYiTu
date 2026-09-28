@@ -4,15 +4,26 @@
  * 四种形态：
  *   html —— 自包含单文件，标题/列表/表格/加粗都是真实排版，双击可看，也能直接粘进 Word
  *   txt  —— 去掉 Markdown 语法符号的纯文本（含 BOM，Windows 记事本不糊中文）
- *   md   —— 原始 Markdown 源码，给需要留档、二次加工的场景
- *   docx —— Word 文档，默认按党政机关公文格式（GB/T 9704—2012）排版，见 docx.ts
+ *   md   —— 原始 Markdown 源码，给需要留档、二次加工的场景（**一个字符都不改**）
+ *   docx —— Word 文档，默认按公文格式排版（版式数值见 docx.ts 的 GONGWEN），见 docx.ts
+ *
+ * ★ emoji 口径：除 md（原数据）外，其余三种导出物都不留 emoji 图标；
+ *   运行组件里**正在显示**的那份 Markdown 也不清（模型写的 ✅📊 在对话里照常显示）。
  *
  * 前三种是纯字符串（不碰 DOM / Blob），最后一种产出字节，方便在 Node 侧直接跑断言；
  * 落盘由调用方负责（download.ts）。
  */
 import { Conversation, ChatAttachment } from './types'
-import { renderMarkdown, renderMarkdownToText, escapeHtml, parseMarkdownBlocks } from './markdown'
-import { buildDocx } from './docx'
+import {
+  renderMarkdown,
+  renderMarkdownToText,
+  escapeHtml,
+  parseMarkdownBlocks,
+  stripInline,
+  stripEmoji,
+  MdBlock
+} from './markdown'
+import { buildDocx, isSubtitle } from './docx'
 import { MIME } from './ooxml'
 
 export type ExportFormat = 'html' | 'txt' | 'md' | 'docx'
@@ -101,9 +112,10 @@ function buildHtml(conv: Conversation, stampText: string): string {
   const turns = conv.messages
     .map(m => {
       const isUser = m.role === 'user'
-      const body = isUser
-        ? `<p>${escapeHtml(m.content || '（空）').replace(/\n/g, '<br/>')}</p>`
-        : renderMarkdown(m.content || '（空）')
+      /* 导出物里不留 emoji 图标（要的是能直接打印/上报的稿子）——
+         用户自己写的正文也同样过一道，否则同一份文件里两套口径更奇怪。 */
+      const src = stripEmoji(m.content || '（空）')
+      const body = isUser ? `<p>${escapeHtml(src).replace(/\n/g, '<br/>')}</p>` : renderMarkdown(src)
       const atts = attLine(m.attachments)
       return (
         `<section class="turn${isUser ? ' me' : ' ai'}">` +
@@ -180,12 +192,13 @@ function buildMarkdown(conv: Conversation, stampText: string): string {
 /**
  * 从正文里挑一个文档标题：**首个标题 > 首段前 24 字 > "文档"**。
  * 三条消息级导出链路（Word / TXT / MD）共用，保证同一个回答导出的文件名与文档标题一致。
+ * 行内标记（`**加粗**`）在这里剥掉：文件名与 Word 里的大标题都不该出现星号。
  */
 export function pickDocTitle(markdown: string): string {
   const blocks = parseMarkdownBlocks(markdown || '')
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i]
-    if (b.type === 'heading') return b.text
+    if (b.type === 'heading') return stripInline(b.text)
   }
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i]
@@ -201,27 +214,52 @@ export function pickDocTitle(markdown: string): string {
  * 接收 **Markdown 文本**而不是 Conversation：消息级导出（单条回答）和会话级导出
  * 都走这里，前者传消息正文，后者传拼好的 Markdown，不必各写一遍。
  *
+ * 标题**就地取材**：调用方指定 > 正文首个标题 > 首段前若干字。
+ * 从正文取标题时那一块被摘掉（否则同一句话会先用二号小标宋居中显示一次、下面又出现
+ * 一次），但标题**不再被提到正文最前** —— 模型常先写一句「以下是…：」再上正文标题，
+ * 那句话原位排在标题上面才顺（见 docx.ts 的 lead）。
+ *
  * @param text 待转换的 Markdown 文本
  */
 export function buildOfficeExport(text: string, o?: OfficeOptions): ExportResult {
   const opt: OfficeOptions = o || {}
   const when = opt.when || new Date()
-  let blocks = parseMarkdownBlocks(text)
+  const blocks = parseMarkdownBlocks(text)
 
-  /* 标题来源：调用方指定 > 正文首个标题 > 首段前若干字。
-     从正文里取标题时要**把它从 blocks 里摘掉**，否则 Word 里同一句话
-     会先以二号小标宋居中显示一次、下面又以层次字体显示一次，看着像出错。 */
   let title = opt.title || ''
+  /** 标题之前的块（模型写的那句引语），原位排在标题上面 */
+  let lead: MdBlock[] = []
+  /** 正文块（摘掉标题、副标题之后剩下的） */
+  let rest = blocks
+  /** 副标题：标题下面紧跟的、整行被圆括号包住的那一块 */
+  let subtitle = ''
+
   if (!title) {
+    let at = -1
     for (let i = 0; i < blocks.length; i++) {
-      const b = blocks[i]
-      if (b.type === 'heading') {
-        title = b.text
-        blocks = blocks.slice(0, i).concat(blocks.slice(i + 1))
+      if (blocks[i].type === 'heading') {
+        at = i
         break
       }
     }
-    if (!title) title = pickDocTitle(text)
+    if (at >= 0) {
+      title = stripInline((blocks[at] as Extract<MdBlock, { type: 'heading' }>).text)
+      lead = blocks.slice(0, at)
+      rest = blocks.slice(at + 1)
+      /* 标题下面前两块里若有「整行被圆括号包住」的（`（2025-2027年）`、`（试行）`），
+         它是副标题 —— 摘出来用楷体排在标题正下方。
+         只看前两块是有意的：正文中段的 `（附件）` 之类不该被拽到标题下面。 */
+      for (let k = 0; k < Math.min(2, rest.length); k++) {
+        const b = rest[k]
+        if ((b.type === 'para' || b.type === 'heading') && isSubtitle(b.text)) {
+          subtitle = stripInline(b.text)
+          rest = rest.slice(0, k).concat(rest.slice(k + 1))
+          break
+        }
+      }
+    } else {
+      title = pickDocTitle(text)
+    }
   }
 
   const base = safeFileName(title)
@@ -231,8 +269,10 @@ export function buildOfficeExport(text: string, o?: OfficeOptions): ExportResult
     fileName: `${name}.docx`,
     content: '',
     mime: MIME.docx,
-    bytes: buildDocx(blocks, {
+    bytes: buildDocx(rest, {
       title,
+      subtitle,
+      lead,
       preset: opt.preset,
       titleFont: opt.titleFont,
       bodyFont: opt.bodyFont,

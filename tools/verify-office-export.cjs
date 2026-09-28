@@ -10,6 +10,8 @@
  *        分割线不落地、消息级 TXT / MD 两种文本出口的收尾与逐字节一致性
  *   【2.5】层次序数换字体（一、/（一）/1./（1），可越级）+ 多余空格清理
  *        （中英文之间、数字前后的空格不能误伤）
+ *   【2.7】标题块：副标题（`（2025-2027年）` → 三号楷体居中）、前言留在标题上面、
+ *        emoji 只清导出物不清原数据
  *   【3】zip 结构自解析 —— 用独立的解析代码读回中央目录，逐个核对 CRC 与大小
  *   【4】调用 tools/verify_ooxml.py（zipfile + ElementTree）做跨语言交叉验证
  *   【5】Node 产物落盘位置与体积
@@ -139,6 +141,28 @@ const ORDINAL_SAMPLE = [
   '依据 GB/T 9704 标准编制，共 30 人参与。',
   '',
   '代码里的空格不能动：`a  b  c`'
+].join('\n')
+
+/* 标题块样本（照着一份真实导出稿还原，用户反馈的三个问题都在这一份里）：
+     1. 模型先写一句「以下是为…：」再上正文标题 —— 那句话要留在**标题上面**、用正文字体字号；
+     2. 标题下面紧跟的 `（2025-2027年）` 是**副标题** —— 三号楷体、居中、紧排在标题下；
+     3. emoji（✅）与各类多余空格都不该出现在导出物里。
+   引号特意用模型爱写的弯引号 “”，并故意在引号旁边加空格 —— 那正是漏网的那一类。 */
+const FRAME_SAMPLE = [
+  '以下是为长寿区制定的**数字重庆建设专项规划框架**（约800字），聚焦区域特色与发展需求，符合重庆市“十四五”数字政府建设规划要求，可直接用于汇报或实施方案编制：',
+  '',
+  '# 长寿区数字重庆建设三年行动计划',
+  '',
+  '（2025-2027年）',
+  '',
+  '一、总体目标',
+  '',
+  '立足“两地一城”定位，打造 **“数字长寿·智联江城” 品牌**。到 2027 年实现：',
+  '',
+  '✅ 政务服务：区级事项“一网通办”率达 98%，审批时限压缩 50%。',
+  '',
+  '1. 算力网络：新建 2 个边缘计算节点。',
+  ''
 ].join('\n')
 
 /* ------------------------------ XML 小工具 ------------------------------ */
@@ -541,6 +565,102 @@ function groupOrdinal(docx, exporter) {
     parasOf(plainXml).map(textOf).filter(t => /总指挥/.test(t)))
 }
 
+/* ------------------------------ 【2.7】标题块：副标题 / 位置 / emoji ------------------------------ */
+
+/**
+ * 三件来自真实导出稿反馈的事：
+ *   1. `（2025-2027年）` 这种**整行被圆括号包住**的一块是副标题 —— 三号楷体、居中、
+ *      紧排在标题正下方（不是混在正文里的一段）；
+ *   2. 模型写在正文标题**之前**的那句引语（"以下是为…："）原位留在标题上面，
+ *      用正文字体字号 —— 早先标题被硬提到最前，那句引语反而被挤到了标题后面；
+ *   3. emoji 图标不进导出物：Word / TXT / HTML 都清掉，只有 Markdown 原数据保留。
+ */
+function groupFrame(docx, exporter) {
+  section('【2.7】标题块：副标题 / 前言位置 / emoji 清理')
+
+  /* ---- 副标题判定（纯函数先单独验一遍） ---- */
+  const SUB_CASES = [
+    ['（2025-2027年）', true, '年份区间'],
+    ['(2025-2027年)', true, '半角括号'],
+    ['（征求意见稿）', true, '公文里的稿别'],
+    ['**（试行）**', true, '外套加粗标记也要认出来'],
+    ['（一）指导思想', false, '第二层层次序数，不是副标题'],
+    ['（1）坚持预防为主', false, '第四层层次序数'],
+    ['（附件）材料清单', false, '括号后面还有正文'],
+    ['一、总体要求', false, '顿号序数'],
+    ['2025-2027年', false, '没有括号'],
+    ['', false, '空行']
+  ]
+  const subBad = []
+  SUB_CASES.forEach(([text, want, why]) => {
+    const got = docx.isSubtitle(text)
+    if (got !== want) subBad.push({ text, want, got, why })
+  })
+  check('副标题判定：' + SUB_CASES.length + ' 个样本（含 5 个反例）全部正确', subBad.length === 0, subBad)
+
+  /* ---- Word 里三块的位置与字体 ---- */
+  const xml = readZipEntry(
+    Buffer.from(exporter.buildOfficeExport(FRAME_SAMPLE, {
+      preset: 'gongwen',
+      meta: ['导出时间：2026/9/28 23:24:24'],
+      when: new Date(2026, 8, 28, 23, 24)
+    }).bytes),
+    'word/document.xml'
+  ).toString('utf8')
+  const paras = parasOf(xml)
+  const texts = paras.map(textOf)
+  const at = t => texts.indexOf(t)
+  const iLead = texts.findIndex(t => /^以下是为长寿区制定的/.test(t))
+  const iTitle = at('长寿区数字重庆建设三年行动计划')
+  const iSub = at('（2025-2027年）')
+
+  check('前言留在标题上面（顺序没有被颠倒）',
+    iLead >= 0 && iTitle >= 0 && iLead < iTitle, { iLead, iTitle, texts: texts.slice(0, 4) })
+  check('副标题紧排在标题下面', iTitle >= 0 && iSub === iTitle + 1, { iTitle, iSub, texts: texts.slice(0, 4) })
+  check('前言用正文字体字号（方正仿宋_GBK，不是小标宋）',
+    iLead >= 0 && fontOf(paras[iLead]) === '方正仿宋_GBK', iLead < 0 ? '(缺失)' : fontOf(paras[iLead]))
+  check('前言是两端对齐的正文段（没有当成标题居中）',
+    iLead >= 0 && /<w:jc w:val="both"\/>/.test(paras[iLead]), iLead < 0 ? '(缺失)' : jcOf(paras[iLead]))
+  check('标题仍是方正小标宋_GBK 居中',
+    iTitle >= 0 && fontOf(paras[iTitle]) === '方正小标宋_GBK' && /w:val="center"/.test(jcOf(paras[iTitle])),
+    iTitle < 0 ? '(缺失)' : [fontOf(paras[iTitle]), jcOf(paras[iTitle])])
+  check('副标题是方正楷体_GBK 居中',
+    iSub >= 0 && fontOf(paras[iSub]) === '方正楷体_GBK' && /w:val="center"/.test(jcOf(paras[iSub])),
+    iSub < 0 ? '(缺失)' : [fontOf(paras[iSub]), jcOf(paras[iSub])])
+  check('副标题只出现一次（摘出后不再留在正文里）',
+    texts.filter(t => t === '（2025-2027年）').length === 1, texts.filter(t => /2025/.test(t)))
+  check('导出时间等信息行仍在标题块之后', /导出时间/.test(texts.join('|')))
+
+  /* ---- emoji 与剩余的空格 ---- */
+  check('emoji 不进 Word（✅ 已清掉）',
+    texts.join('|').indexOf('✅') < 0, texts.filter(t => /✅/.test(t)))
+  check('emoji 清掉后文字与它之间的空格也没留下（✅ 政务服务 → 政务服务）',
+    texts.some(t => /^政务服务：区级事项/.test(t)), texts.filter(t => /政务服务/.test(t)))
+  check('引号旁边的空格清掉（打造 “数字长寿·智联江城” 品牌 → 无缝）',
+    texts.some(t => t.indexOf('打造“数字长寿·智联江城”品牌。到 2027 年实现：') >= 0),
+    texts.filter(t => /打造/.test(t)))
+  check('有序列表的序号后面不留空格（1. 算力网络 → 1.算力网络）',
+    texts.some(t => /^1\.算力网络：新建 2 个边缘计算节点。$/.test(t)), texts.filter(t => /算力网络/.test(t)))
+  check('全篇没有 emoji 残留（Word 正文里）',
+    !/[\u2600-\u27BF\u2B50-\u2B55]|[\uD83C-\uD83E][\uDC00-\uDFFF]/.test(texts.join('')))
+
+  /* ---- TXT 同一套口径；MD 原数据一个字符都不改 ---- */
+  const txt = exporter.buildMessageText(FRAME_SAMPLE, { when: new Date(2026, 8, 28, 23, 24) })
+  check('TXT 同样清掉 emoji', txt.content.indexOf('✅') < 0, txt.content.slice(0, 60))
+  check('TXT 里副标题与标题同框（TXT 不做排版，只去语法）',
+    txt.content.indexOf('长寿区数字重庆建设三年行动计划') >= 0 &&
+      txt.content.indexOf('（2025-2027年）') >= 0)
+  check('MD 原文保留 emoji（渲染前的原数据不加工）',
+    exporter.buildMessageMarkdown(FRAME_SAMPLE, { when: new Date(2026, 8, 28, 23, 24) }).content ===
+      FRAME_SAMPLE)
+  const html = exporter.buildExport(
+    { title: '会话', messages: [{ id: '1', role: 'assistant', content: FRAME_SAMPLE }] },
+    'html',
+    '2026/9/28 23:24:24'
+  ).content
+  check('HTML 导出也清掉 emoji', html.indexOf('✅') < 0 && html.indexOf('政务服务：区级事项') >= 0)
+}
+
 /* ------------------------------ 【3】zip 自解析 ------------------------------ */
 
 /** 独立实现一个最小 zip 解析器：从 EOCD 读中央目录，再按偏移取本地项 */
@@ -734,6 +854,12 @@ function groupArtifacts(exporter) {
       title: '层次序数',
       preset: 'gongwen',
       when: new Date(2026, 8, 28, 22, 30)
+    })],
+    // 给 Python 侧验副标题 / 前言位置 / emoji 清理
+    ['case-frame.docx', exporter.buildOfficeExport(FRAME_SAMPLE, {
+      preset: 'gongwen',
+      meta: ['导出时间：2026/9/28 23:24:24'],
+      when: new Date(2026, 8, 28, 23, 24)
     })]
   ]
 
@@ -788,6 +914,7 @@ async function main() {
   groupInline(md)
   groupBlocks(md, exporter)
   groupOrdinal(docx, exporter)
+  groupFrame(docx, exporter)
   groupZip(zip)
   groupArtifacts(exporter)
   await groupPython()

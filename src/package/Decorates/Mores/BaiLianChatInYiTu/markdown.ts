@@ -13,6 +13,8 @@
  * 空白清理：模型爱用空格摆版式（`总指挥：   企业主要负责人`、`一、 总体要求`），
  *      网页上还看得过去，导出成 Word 就是满篇多余空格。三条渲染链路都在取"内容"的地方
  *      统一过 squeezeSpaces()（只清内容，不动行首缩进 —— 那是列表的层级）。
+ *      导出/复制那两条链路（TXT、Word）再过一道 stripEmoji()：
+ *      `✅ 政务服务：…` 这种图标在对话里留着无妨，落到公文里就只剩不正式。
  */
 
 /** 导出 HTML 时也要转义用户输入，共用同一份实现 */
@@ -29,8 +31,44 @@ const safeUrl = (u: string) => {
 
 /* ------------------------------ 空白清理 ------------------------------ */
 
-/** 中日韩文字与全角标点（含全角空格 U+3000） */
-const CJK = '\\u3000-\\u303F\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\uFE30-\\uFE4F\\uFF00-\\uFFEF'
+/**
+ * 中日韩的"文字一侧"：汉字区、全角标点、全角空格（U+3000）。
+ *
+ * 第二行是**中文标点里落在西文码位上的那批** —— 弯引号 “”‘’、破折号 ——、
+ * 省略号 ……、间隔号 ·/・。它们和汉字同属中文一侧，
+ * 少了它们 `打造 “数字长寿” 品牌` 这种写法（空格贴着引号）就清不掉。
+ * 直引号 " ' 也收进来：模型有时写直引号，同样不该在中文旁边留空格
+ * （左邻必须先是汉字，所以英文里的 `say "hi"` 不会被误伤）。
+ */
+const CJK =
+  '\\u3000-\\u303F\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\uFE30-\\uFE4F\\uFF00-\\uFFEF' +
+  '\\u0022\\u0027\\u00B7\\u2010-\\u201F\\u2026\\u2027\\u30FB'
+
+/** 汉字（收窄版，只用于"序数后面必须跟中文"这类判断） */
+const HAN = '\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF'
+
+/**
+ * emoji 与其附属字符。
+ *
+ * ★ 只清"真 emoji"，**箭头与几何图形留着**：`→`（U+2192）、`●`（U+25CF）在中文技术文里
+ *   是承载语义的符号（"需求 → 设计"、"● 一级指标"），删掉就把意思改坏了；
+ *   而 ✅（U+2705）、🎯、📊 这类只是装饰。区间就是这么划的：
+ *     2300-23FF  ⌚⏰⏳
+ *     2600-27BF  ✅❌✨⭐✂⚠ 等杂项符号与装饰符
+ *     2B50-2B55  ⭐⭕（同一区间里的 ⬅⬆⬇ 是箭头，刻意不收）
+ *     1F000+     🎯📊🚀 等（代理对高位 D83C-D83E + 低位）
+ *     FE00-FE0F  变体选择符（U+FE0F 是"按 emoji 画"的那个小尾巴）
+ *     200D / 20E3  零宽连接符、键帽
+ */
+const EMOJI_RE =
+  /[\u2300-\u23FF\u2600-\u27BF\u2B50-\u2B55\uFE00-\uFE0F\u200D\u20E3]|[\uD83C-\uD83E][\uDC00-\uDFFF]/g
+
+/**
+ * 摘掉 emoji 图标。导出链路（Word / TXT / HTML 导出）专用 ——
+ * 运行组件里**正在显示**的那份 Markdown 不过这一道，模型写的图标照常显示，
+ * 只有落成文件时才不要它们（公文里一串 ✅ 只会显得不正式）。
+ */
+export const stripEmoji = (s: string): string => String(s == null ? '' : s).replace(EMOJI_RE, '')
 
 /**
  * 清理一行**内容**里多余的空格。
@@ -45,13 +83,17 @@ const CJK = '\\u3000-\\u303F\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\uFE30
  * 规则：
  *   1. 行内代码里的空格是内容本身，先摘成占位符，清完再原样还原；
  *   2. 全角空格归一成半角，连续空白收成一个；
- *   3. 中文与中文（含全角标点）之间的空格一律去掉。中英文之间、数字前后的空格是
+ *   3. 中文与中文（含中文标点）之间的空格一律去掉。中英文之间、数字前后的空格是
  *      正常写法（「依据 GB/T 9704 标准」「共 30 人」），一律不动；
- *   4. 首尾去空白。
+ *   4. 行首层次序数后面紧跟的空格去掉（`1. 算力网络` → `1.算力网络`）；
+ *   5. 首尾去空白。
+ *
+ * @param dropEmoji 导出链路传 true：先摘 emoji 再清空格（`✅ 政务服务` → `政务服务`）
  */
-export function squeezeSpaces(line: string): string {
+export function squeezeSpaces(line: string, dropEmoji?: boolean): string {
   let s = String(line == null ? '' : line)
   if (!s) return ''
+  if (dropEmoji) s = stripEmoji(s)
 
   const codes: string[] = []
   s = s.replace(/`([^`]+)`/g, (_m, c: string) => {
@@ -69,12 +111,32 @@ export function squeezeSpaces(line: string): string {
   s = s.replace(new RegExp(`([${CJK}])${mark}[ \\t]+${mark}(?=[${CJK}])`, 'g'), '$1$2$3')
 
   s = s.trim()
+
+  /* 行首层次序数后紧跟的空格：`1. 算力网络`、`一、 总体要求`、`（一） 指导思想`。
+     ★ 为什么不能靠上一条：序数尾巴是 `.` `)` 这类**非汉字**字符，上一条要求空格两侧
+       都是中文一侧的字符，`1. 算力` 的左边是 `.`，整条规则不成立 —— 于是漏网。
+     ★ 为什么要 `(?=[汉字])`：`3. 5 万元` 可能是金额不是序数，后面不是汉字就不动它。 */
+  s = s.replace(
+    new RegExp(`^([（(]?[0-9${HAN}]{1,4}[.)、）．])[ \\t]+(?=[${HAN}])`),
+    '$1'
+  )
+
   s = s.replace(/\u0002(\d+)\u0002/g, (_m, n: string) => {
     const c = codes[Number(n)]
     return c == null ? '' : '`' + c + '`'
   })
   return s
 }
+
+/**
+ * 导出/复制链路的内容清理 = 摘 emoji + 清多余空格。
+ *
+ * 屏幕上那份渲染（renderMarkdown）**不用**它：模型写的 ✅📊 在对话气泡里照常显示，
+ * 只有要落成 Word / TXT / 剪贴板内容时才不要这些图标。
+ * ★ 传函数引用时要包一层（`.map(c => cleanText(c))`）—— `.map(cleanText)` 会把
+ *   下标当成第二个参数塞进 dropEmoji，第 1 个元素之后的 emoji 就清不掉了。
+ */
+const cleanText = (s: string): string => squeezeSpaces(s, true)
 
 /* ------------------------------ 行内语法 ------------------------------ */
 
@@ -414,7 +476,7 @@ export function renderMarkdownToText(raw: string): string {
     const h = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(ln)
     if (h) {
       blank()
-      out.push(stripInline(squeezeSpaces(h[2])))
+      out.push(stripInline(cleanText(h[2])))
       i++
       continue
     }
@@ -424,7 +486,7 @@ export function renderMarkdownToText(raw: string): string {
       blank()
       const buf: string[] = []
       while (i < lines.length && /^ {0,3}>/.test(lines[i])) {
-        buf.push(stripInline(squeezeSpaces(lines[i].replace(/^ {0,3}>\s?/, ''))))
+        buf.push(stripInline(cleanText(lines[i].replace(/^ {0,3}>\s?/, ''))))
         i++
       }
       out.push(buf.join('\n'))
@@ -434,10 +496,10 @@ export function renderMarkdownToText(raw: string): string {
     // 表格：去掉分隔行，单元格用 ` | ` 连
     if (t.indexOf('|') >= 0 && i + 1 < lines.length && isTableSep(lines[i + 1])) {
       blank()
-      out.push(splitCells(ln).map(c => stripInline(squeezeSpaces(c))).join(' | '))
+      out.push(splitCells(ln).map(c => stripInline(cleanText(c))).join(' | '))
       i += 2
       while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') >= 0) {
-        out.push(splitCells(lines[i]).map(c => stripInline(squeezeSpaces(c))).join(' | '))
+        out.push(splitCells(lines[i]).map(c => stripInline(cleanText(c))).join(' | '))
         i++
       }
       continue
@@ -460,13 +522,13 @@ export function renderMarkdownToText(raw: string): string {
           counters.length = level + 1
           counters[level] = (counters[level] || 0) + 1
           const marker = ordered ? `${counters[level]}. ` : '- '
-          out.push('  '.repeat(level) + marker + stripInline(squeezeSpaces(m[3])))
+          out.push('  '.repeat(level) + marker + stripInline(cleanText(m[3])))
           i++
           continue
         }
         // 续行（缩进 ≥2 空格）：并进上一项
         if (out.length && lines[i].trim() && /^\s{2,}/.test(lines[i])) {
-          out[out.length - 1] += '\n' + stripInline(squeezeSpaces(lines[i].trim()))
+          out[out.length - 1] += '\n' + stripInline(cleanText(lines[i].trim()))
           i++
           continue
         }
@@ -483,7 +545,7 @@ export function renderMarkdownToText(raw: string): string {
       if (isBlockStart(cur)) break
       // 表格首行要留给主循环 —— 只有它才知道下一行是不是分隔行
       if (cur.trim().indexOf('|') >= 0 && i + 1 < lines.length && isTableSep(lines[i + 1])) break
-      buf.push(stripInline(squeezeSpaces(cur.trim())))
+      buf.push(stripInline(cleanText(cur.trim())))
       i++
     }
     out.push(buf.join('\n'))
@@ -736,7 +798,7 @@ export function parseMarkdownBlocks(raw: string): MdBlock[] {
     // 标题
     const h = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(ln)
     if (h) {
-      out.push({ type: 'heading', level: h[1].length, text: squeezeSpaces(h[2]) })
+      out.push({ type: 'heading', level: h[1].length, text: cleanText(h[2]) })
       i++
       continue
     }
@@ -745,7 +807,7 @@ export function parseMarkdownBlocks(raw: string): MdBlock[] {
     if (/^ {0,3}>/.test(ln)) {
       const buf: string[] = []
       while (i < lines.length && /^ {0,3}>/.test(lines[i])) {
-        buf.push(squeezeSpaces(lines[i].replace(/^ {0,3}>\s?/, '')))
+        buf.push(cleanText(lines[i].replace(/^ {0,3}>\s?/, '')))
         i++
       }
       out.push({ type: 'quote', text: buf.join('\n') })
@@ -754,14 +816,14 @@ export function parseMarkdownBlocks(raw: string): MdBlock[] {
 
     // 表格：当前行含 | 且下一行是分隔行
     if (t.indexOf('|') >= 0 && i + 1 < lines.length && isTableSep(lines[i + 1])) {
-      const head = splitCells(ln).map(squeezeSpaces)
+      const head = splitCells(ln).map(c => cleanText(c))
       const aligns = splitCells(lines[i + 1]).map((c: string) =>
         /^:-+:$/.test(c) ? 'center' : /^:-+/.test(c) ? 'left' : /-+:$/.test(c) ? 'right' : ''
       )
       i += 2
       const rows: string[][] = []
       while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') >= 0) {
-        rows.push(splitCells(lines[i]).map(squeezeSpaces))
+        rows.push(splitCells(lines[i]).map(c => cleanText(c)))
         i++
       }
       out.push({ type: 'table', head, rows, aligns })
@@ -782,14 +844,14 @@ export function parseMarkdownBlocks(raw: string): MdBlock[] {
           const ordered = /\d/.test(m[2])
           counters.length = level + 1
           counters[level] = (counters[level] || 0) + 1
-          out.push({ type: 'item', ordered, level, index: counters[level], text: squeezeSpaces(m[3]) })
+          out.push({ type: 'item', ordered, level, index: counters[level], text: cleanText(m[3]) })
           i++
           continue
         }
         // 续行（缩进 ≥2 空格）：并进上一项
         if (out.length && out[out.length - 1].type === 'item' && lines[i].trim() && /^\s{2,}/.test(lines[i])) {
           const prev = out[out.length - 1] as Extract<MdBlock, { type: 'item' }>
-          prev.text += '\n' + squeezeSpaces(lines[i].trim())
+          prev.text += '\n' + cleanText(lines[i].trim())
           i++
           continue
         }
@@ -805,7 +867,7 @@ export function parseMarkdownBlocks(raw: string): MdBlock[] {
       if (isBlockStart(cur)) break
       // 表格首行要留给主循环 —— 只有它才知道下一行是不是分隔行
       if (cur.trim().indexOf('|') >= 0 && i + 1 < lines.length && isTableSep(lines[i + 1])) break
-      buf.push(squeezeSpaces(cur.trim()))
+      buf.push(cleanText(cur.trim()))
       i++
     }
     if (buf.length) out.push({ type: 'para', text: buf.join('\n') })

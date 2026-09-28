@@ -2632,7 +2632,7 @@ export default {
     transform: rotate(180deg);
   }
 
-  /* 导出进行中：两个导出按钮一起禁用，避免同一秒内重复触发下载 */
+  /* 导出进行中：三个导出按钮一起禁用，避免同一秒内重复触发下载 */
   &:disabled {
     cursor: default;
     opacity: 0.45;

@@ -179,7 +179,7 @@ function buildMarkdown(conv: Conversation, stampText: string): string {
 
 /**
  * 从正文里挑一个文档标题：**首个标题 > 首段前 24 字 > "文档"**。
- * 两条导出链路（Word / TXT）共用，保证同一个回答导出的文件名与文档标题是一致的。
+ * 三条消息级导出链路（Word / TXT / MD）共用，保证同一个回答导出的文件名与文档标题一致。
  */
 export function pickDocTitle(markdown: string): string {
   const blocks = parseMarkdownBlocks(markdown || '')

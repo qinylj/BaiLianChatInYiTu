@@ -392,7 +392,12 @@ import {
   uid
 } from './api'
 // 轻量 Markdown 渲染（自研、零依赖，见 markdown.ts）：标题/列表/代码块/表格/强调等
-import { renderMarkdown as formatMessage } from './markdown'
+// renderMarkdownToText 是同一套语法的"纯文本版"，复制/导出时用它去掉语法符号
+import { renderMarkdown as formatMessage, renderMarkdownToText } from './markdown'
+// 复制：富文本 + 纯文本双形态，非安全上下文也有兜底（见 clipboard.ts）
+import { copyMessageText } from './clipboard'
+// 导出内容构造（纯函数，见 exporter.ts）：html / txt / md 三种形态
+import { buildExport } from './exporter'
 import {
   AgentItem,
   ChatAttachment,
@@ -1226,31 +1231,19 @@ const stop = () => {
 /** 刚被复制的消息 id，用于把复制图标短暂换成对勾 */
 const copiedId = ref('')
 
+/**
+ * 复制一条消息。
+ *
+ * 给的是**渲染后的内容**，不是 Markdown 原文：
+ *   - 富文本片（text/html）= renderMarkdown 的结果，粘到 Word / 邮件里还是标题、列表、表格；
+ *   - 纯文本片（text/plain）= renderMarkdownToText 的结果，语法符号已经剥掉，
+ *     粘到记事本 / 输入框里不会出现一堆 `**` 和 `|`。
+ * 具体怎么落到剪贴板（execCommand 富文本优先，逐级兜底）见 clipboard.ts。
+ */
 const copyMessage = async (msg: ChatMessage) => {
   const text = msg.content || ''
   if (!text) return
-  let ok = false
-  try {
-    // 大屏 / 预览页常跑在 http 或 iframe 里，navigator.clipboard 在非安全上下文直接是
-    // undefined，只用它会出现"点了复制毫无反应"。所以保留 execCommand 兜底。
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text)
-      ok = true
-    } else {
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.setAttribute('readonly', '')
-      ta.style.position = 'fixed'
-      ta.style.top = '-1000px'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      ok = document.execCommand('copy')
-      document.body.removeChild(ta)
-    }
-  } catch (e) {
-    ok = false
-  }
+  const ok = await copyMessageText(formatMessage(text), renderMarkdownToText(text))
   if (!ok) return
   copiedId.value = msg.id
   window.setTimeout(() => {
@@ -1316,29 +1309,27 @@ const vote = async (msg: ChatMessage, v: 'LIKE' | 'DISLIKE') => {
  * 导出
  * ------------------------------------------------------------------ */
 
+/**
+ * 导出当前会话。
+ * 内容由 exporter.ts 构造（纯函数）：
+ *   html（默认）= 渲染后的排版，自包含单文件，双击可看 / 可直接粘进 Word
+ *   txt  = 渲染后的纯文本，带 BOM（Windows 记事本不糊中文）
+ *   md   = 原始 Markdown 源码，留档用
+ * 具体格式由 option.exportFormat 决定。
+ */
 const exportConversation = () => {
   const conv = activeConv.value
   if (!conv || !conv.messages.length) return
-  const lines: string[] = [
-    `# ${conv.targetName || '对话记录'}`,
-    '',
-    `导出时间：${new Date().toLocaleString('zh-CN')}`,
-    `会话标识：${conv.sessionId || '（未建立）'}`,
-    '',
-    '---',
-    ''
-  ]
-  conv.messages.forEach(m => {
-    lines.push(m.role === 'user' ? '**我：**' : `**${conv.targetName || 'AI'}：**`)
-    lines.push('')
-    lines.push(m.content || '（空）')
-    lines.push('')
-  })
-  const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+  const { fileName, content, mime } = buildExport(
+    conv,
+    o.value.exportFormat,
+    new Date().toLocaleString('zh-CN')
+  )
+  const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `${(conv.title || '对话记录').replace(/[\\/:*?"<>|]/g, '_')}.md`
+  a.download = fileName
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -1385,9 +1376,16 @@ const connText = computed(() => {
 
 const topbarSub = computed(() => {
   const conv = activeConv.value
+  // 生成中优先：否则流式回复时副标题还停在"未建立会话"，看着像没连上
+  if (busy.value) return o.value.runningText
   if (!conv) return o.value.idleText
-  if (!conv.sessionId) return o.value.idleText
-  return `会话 ${conv.sessionId.slice(0, 8)}…`
+  if (conv.sessionId) return `会话 ${conv.sessionId.slice(0, 8)}…`
+  /* 没有会话号时分两种情况：
+     - 大模型是直连 /chat/completions，本来就不会创建会话，
+       这时写"未建立会话（首轮自动创建）"是错的（永远等不到首轮）；
+     - 智能体首轮之前确实会建会话，才用 idleText 那句。 */
+  if (conv.targetKind === 'model') return o.value.directText
+  return o.value.idleText
 })
 
 const summaryText = computed(
@@ -1455,7 +1453,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.1'
+  version: '1.0.2'
 }
 </script>
 

@@ -93,6 +93,12 @@
                 <CustomSwitch label="显示顶部信息栏" v-model:value="optionData.showTopbar" elMarginBottom="10px" />
                 <!-- 停止按钮已移到输入区的发送键上（生成中时发送键变停止），这里只剩导出 -->
                 <CustomSwitch label="显示导出按钮" v-model:value="optionData.showActions" elMarginBottom="10px" />
+                <CustomInputSelect
+                  v-if="optionData.showActions"
+                  label="导出格式"
+                  v-model:value="optionData.exportFormat"
+                  :options="exportFormatOptions"
+                />
               </div>
 
               <div class="sub3">
@@ -785,6 +791,12 @@ const tabData = [
 const targetKindOptions = [
   { label: '智能体（百炼）', value: 'agent' },
   { label: '大模型（直连）', value: 'model' }
+]
+
+const exportFormatOptions = [
+  { label: 'HTML（渲染后的排版）', value: 'html' },
+  { label: '纯文本（去语法符号）', value: 'txt' },
+  { label: 'Markdown 原文', value: 'md' }
 ]
 
 const paramSourceOptions = [

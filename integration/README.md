@@ -27,6 +27,7 @@
 | `index.vue`（运行组件） | 仅 `vue`，**不依赖 naive-ui**（保证打进大屏的包足够小） |
 | `config.vue`（设置面板） | `naive-ui`、`lodash`、工程内 `@/components/Pages/ChartItemSetting` |
 | `api.ts` / `presets.ts` / `types.ts` / `config.ts` | 无第三方依赖 |
+| `markdown.ts` / `clipboard.ts` / `exporter.ts` | 无第三方依赖（Markdown 渲染、剪贴板、导出各自自研） |
 
 ## 2. 放调试台（可选，但强烈建议）
 

@@ -11,7 +11,8 @@
  *      未闭合的代码块照样按代码块渲染、半截强调保持字面量，不会把语法符号当正文吐给用户。
  */
 
-const escapeHtml = (s: string) =>
+/** 导出 HTML 时也要转义用户输入，共用同一份实现 */
+export const escapeHtml = (s: string) =>
   String(s == null ? '' : s).replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]
   )
@@ -268,3 +269,182 @@ export function renderMarkdown(raw: string): string {
 }
 
 export default renderMarkdown
+
+/* ==================================================================== *
+ * 纯文本渲染：复制到剪贴板的 text/plain 片段、导出 .txt
+ *
+ * 为什么单独写一遍而不是"渲染 HTML 再扒标签"：
+ *   运行组件零依赖，没有 DOM 解析器可用（Node 侧测试也跑不起来）。
+ * 代价是要和 renderMarkdown 保持同一套块级判定，所以这里**逐块对照**着上面写，
+ * 两边改动要同步 —— 语法集合是固定的（就下面这几类），维护成本可控。
+ *
+ * 约定：**去掉语法符号，保留阅读结构**。
+ *   列表保留 `- ` / `1. ` 前缀（去掉反而读不出层级），引用去掉 `>`，
+ *   表格去掉分隔行、单元格用 ` | ` 连接（各占一行，粘到哪都还能看出是几列）。
+ * ==================================================================== */
+
+/** 行内：剥掉强调/代码/链接等语法符号，只留文字 */
+export const stripInline = (s: string) => {
+  let out = String(s == null ? '' : s)
+  // 图片：正文里是我们自己生成的 ![图片](url)，纯文本给个占位，别把 url 摊在正文里
+  out = out.replace(/!\[([^\]]*)\]\(\s*[^)\s]*(?:\s+["'][^"']*["'])?\s*\)/g, (_m, alt) =>
+    alt ? `[${alt}]` : '[图片]'
+  )
+  // 链接：文字和地址不同才把地址附在后面，相同（裸链）就只留一份
+  out = out.replace(/\[([^\]\n]*)\]\(\s*([^)\s]+)(?:\s+["'][^"']*["'])?\s*\)/g, (_m, txt, url) =>
+    !txt || txt === url ? url : `${txt}（${url}）`
+  )
+  out = out.replace(/`([^`]+)`/g, '$1')
+  out = out.replace(/\*\*([^*]+)\*\*/g, '$1')
+  out = out.replace(/__([^_]+)__/g, '$1')
+  out = out.replace(/~~([^~]+)~~/g, '$1')
+  out = out.replace(/(^|[^*\w])\*([^*\n]+)\*(?![*\w])/g, '$1$2')
+  out = out.replace(/(^|[^_\w])_([^_\n]+)_(?![_\w])/g, '$1$2')
+  return out
+}
+
+/**
+ * 把 Markdown 渲染成"给人读的纯文本"。
+ * 与 renderMarkdown 同一套块级规则：标题 / 列表（可嵌套）/ 引用 / 分割线 /
+ * 代码块（原样保留）/ 表格 / 段落。
+ */
+export function renderMarkdownToText(raw: string): string {
+  const src = String(raw == null ? '' : raw).replace(/\r\n?/g, '\n')
+  const lines = src.split('\n')
+  const out: string[] = []
+  /** 空行统一收口：连续空行只留一个，末尾不补 */
+  const blank = () => {
+    if (out.length && out[out.length - 1] !== '') out.push('')
+  }
+
+  let i = 0
+  /* 保险丝：每个分支都必须自己推进 i，漏一个就是死循环（数组会一直长到 RangeError 崩掉页面）。
+     这里兜住 —— 解析的是模型流式输出，宁可少渲染一行也不能把大屏卡死。 */
+  let guard = 0
+  while (i < lines.length) {
+    if (++guard > lines.length * 4 + 64) break
+    const ln = lines[i]
+    const t = ln.trim()
+
+    if (!t) {
+      blank()
+      i++
+      continue
+    }
+
+    // 分割线（先于列表判断，否则 `---` 会被当成空列表项）
+    if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(ln)) {
+      blank()
+      out.push('----------')
+      i++
+      continue
+    }
+
+    // 代码块：内容原样保留，不做行内剥离（代码里的 `**` 就是两个星号）
+    const fenceOpen = /^ {0,3}(?:`{3,}|~{3,})\s*[\w+#.-]*\s*$/.exec(ln)
+    if (fenceOpen) {
+      blank()
+      const buf: string[] = []
+      i++
+      while (i < lines.length && !/^ {0,3}(?:`{3,}|~{3,})\s*$/.test(lines[i])) {
+        buf.push(lines[i])
+        i++
+      }
+      if (i < lines.length) i++ // 吃掉收尾的 ```
+      out.push(buf.join('\n'))
+      continue
+    }
+
+    // 标题：去掉 #，文字照旧
+    const h = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(ln)
+    if (h) {
+      blank()
+      out.push(stripInline(h[2]))
+      i++
+      continue
+    }
+
+    // 引用：去掉 >，内容照旧
+    if (/^ {0,3}>/.test(ln)) {
+      blank()
+      const buf: string[] = []
+      while (i < lines.length && /^ {0,3}>/.test(lines[i])) {
+        buf.push(stripInline(lines[i].replace(/^ {0,3}>\s?/, '')))
+        i++
+      }
+      out.push(buf.join('\n'))
+      continue
+    }
+
+    // 表格：去掉分隔行，单元格用 ` | ` 连
+    if (t.indexOf('|') >= 0 && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      blank()
+      out.push(splitCells(ln).map(stripInline).join(' | '))
+      i += 2
+      while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') >= 0) {
+        out.push(splitCells(lines[i]).map(stripInline).join(' | '))
+        i++
+      }
+      continue
+    }
+
+    // 列表：保留缩进与 `- `/`N. ` 前缀，层级用两空格缩进表达
+    const li = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/.exec(ln)
+    if (li) {
+      blank()
+      let base = -1
+      /** 每层的序号计数（有序列表自己重排，避免模型写的序号跳号） */
+      const counters: number[] = []
+      while (i < lines.length) {
+        const m = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/.exec(lines[i])
+        if (m) {
+          const indent = m[1].replace(/\t/g, '    ').length
+          if (base < 0) base = indent
+          const level = indent <= base ? 0 : Math.min(3, Math.max(1, Math.floor((indent - base) / 2)))
+          const ordered = /\d/.test(m[2])
+          counters.length = level + 1
+          counters[level] = (counters[level] || 0) + 1
+          const marker = ordered ? `${counters[level]}. ` : '- '
+          out.push('  '.repeat(level) + marker + stripInline(m[3]))
+          i++
+          continue
+        }
+        // 续行（缩进 ≥2 空格）：并进上一项
+        if (out.length && lines[i].trim() && /^\s{2,}/.test(lines[i])) {
+          out[out.length - 1] += '\n' + stripInline(lines[i].trim())
+          i++
+          continue
+        }
+        break
+      }
+      continue
+    }
+
+    // 段落：整段里的换行保留
+    blank()
+    const buf: string[] = []
+    while (i < lines.length && lines[i].trim()) {
+      const cur = lines[i]
+      if (isBlockStart(cur)) break
+      // 表格首行要留给主循环 —— 只有它才知道下一行是不是分隔行
+      if (cur.trim().indexOf('|') >= 0 && i + 1 < lines.length && isTableSep(lines[i + 1])) break
+      buf.push(stripInline(cur.trim()))
+      i++
+    }
+    out.push(buf.join('\n'))
+  }
+
+  // 收口：去掉尾部空行
+  while (out.length && out[out.length - 1] === '') out.pop()
+  return out.join('\n')
+}
+
+/** 段落收集的终止判定：遇到任何一种块级起点就交给主循环处理 */
+const isBlockStart = (ln: string): boolean => {
+  if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(ln)) return true
+  if (/^ {0,3}(?:`{3,}|~{3,})\s*[\w+#.-]*\s*$/.test(ln)) return true
+  if (/^ {0,3}#{1,6}\s+/.test(ln)) return true
+  if (/^ {0,3}>/.test(ln)) return true
+  if (/^(\s*)([-*+]|\d{1,9}[.)])\s+/.test(ln)) return true
+  return false
+}

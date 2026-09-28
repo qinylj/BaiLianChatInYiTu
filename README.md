@@ -31,6 +31,11 @@
   流式下半截语法（未闭合的 ``` 、半个 `**`）也不会把符号当正文吐出来
 - 首轮自动创建会话；上下文可携带指定条数的历史消息
 - 消息操作：复制 / 点赞 / 点踩 / 重新回答（hover 显示，按角色左右对齐）
+- **复制的是渲染后的内容，不是 Markdown 原文**：剪贴板里同时写入富文本与纯文本两个形态 ——
+  粘到 Word / 邮件还是标题、列表、表格、加粗；粘到记事本 / 输入框则没有 `**`、`|` 这些符号
+  （大屏跑在 http 下没有 Clipboard API，走的是"选中隐藏容器 + execCommand"，实测两种形态都在）
+- **导出也按渲染后的样子出**：默认 `.html` 单文件（能直接打开，也能直接粘进 Word），
+  可选 `.txt`（去语法符号，带 BOM，Windows 记事本不乱码）或 `.md`（源码留档）
 - 输入区支持附件入口（聚焦时出现）、Enter 发送 / Shift+Enter 换行
 
 **左侧栏**
@@ -86,15 +91,19 @@ BaiLianChatInYiTu/
 │   └── version.js              # 版本号唯一数据源 + 自增 + 构建戳（新增文件）
 ├── tools/
 │   ├── bump-version.cjs        # 版本号命令行：查看 / 自增 / 指定
-│   └── pack.cjs                # 把 dist 打成带版本的交付 zip（零依赖 zip 写入）
+│   ├── pack.cjs                # 把 dist 打成带版本的交付 zip（零依赖 zip 写入）
+│   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"（63 项，无需浏览器）
+│   └── verify-copy-clipboard.cjs  # 真浏览器自检：剪贴板里到底是渲染后内容还是 Markdown 原文
 └── src/
-    ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（10 个文件）
+    ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（12 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
     │   ├── config.ts           # 默认 option（约 60 个配置项都在这里）
     │   ├── config.vue          # 设置面板（naive-ui，分组折叠）
     │   ├── index.vue           # 运行组件（对话界面，零 UI 库依赖）
     │   ├── api.ts              # 两种协议的请求、SSE 解析、<think> 标签拆分
-    │   ├── markdown.ts         # 自研 Markdown 渲染器（零依赖，先转义再套格式）
+    │   ├── markdown.ts         # 自研 Markdown 渲染器（零依赖，先转义再套格式）+ 纯文本版
+    │   ├── clipboard.ts        # 复制：富文本 + 纯文本双形态，非安全上下文有兜底
+    │   ├── exporter.ts         # 导出内容构造：html / txt / md 三种形态（纯函数）
     │   ├── presets.ts          # 主题 / 背景 / 默认智能体 / 默认模型 / 默认网关
     │   ├── types.ts            # 类型定义
     │   ├── data.json           # 组件默认数据

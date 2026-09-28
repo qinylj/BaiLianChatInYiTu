@@ -45,10 +45,14 @@ export const option = {
   connectedText: '已连接网关',
   /** 顶栏在「已建立会话」时展示的兜底文案，实际优先用当前对话对象的名字 */
   idleText: '未建立会话（首轮自动创建）',
+  /** 大模型是直连 /chat/completions，根本没有会话号，不能沿用上面那句（会一直显示"首轮自动创建"） */
+  directText: '大模型直连（无会话）',
   runningText: '正在生成…',
   readyText: '就绪',
   stopText: '停止',
   exportText: '导出',
+  /** 导出格式：html=渲染后的排版（默认）/ txt=渲染后的纯文本 / md=Markdown 原文 */
+  exportFormat: 'html',
   placeholder: '输入消息，Enter 发送 / Shift+Enter 换行',
   inputHint: '界面由长寿区委改革办数建科设计，以GPL-3.0协议开源',
   emptyHistoryText: '暂无历史对话',

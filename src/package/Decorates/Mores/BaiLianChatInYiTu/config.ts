@@ -51,8 +51,23 @@ export const option = {
   readyText: '就绪',
   stopText: '停止',
   exportText: '导出',
-  /** 导出格式：html=渲染后的排版（默认）/ txt=渲染后的纯文本 / md=Markdown 原文 */
+  /** 导出格式：html=渲染后的排版（默认）/ txt=渲染后的纯文本 / md=Markdown 原文 /
+   *  docx=Word 文档（默认按党政机关公文格式排版）/ xlsx=Excel 工作簿 */
   exportFormat: 'html',
+  /** 消息级导出按钮：显示在每条回答脚注的「重答」旁边，导出单条内容 */
+  showMsgExport: true,
+  exportWordText: '导出 Word',
+  exportExcelText: '导出 Excel',
+  /**
+   * Word 排版预设：
+   *   gongwen —— 党政机关公文格式（GB/T 9704—2012）：上37下35左28右26mm、
+   *              正文三号仿宋_GB2312、固定行距 28.8 磅、首行缩进 2 字符、
+   *              标题二号小标宋居中、页脚「— 1 —」页码
+   *   plain   —— 普通文档：1 英寸页边距、小四宋体、1.5 倍行距
+   */
+  docxPreset: 'gongwen',
+  /** 公文标题字体。留空用预设的「方正小标宋简体」（该字体需自行安装，未装时 Word 会自动回退） */
+  docxTitleFont: '',
   placeholder: '输入消息，Enter 发送 / Shift+Enter 换行',
   inputHint: '界面由长寿区委改革办数建科设计，以GPL-3.0协议开源',
   emptyHistoryText: '暂无历史对话',

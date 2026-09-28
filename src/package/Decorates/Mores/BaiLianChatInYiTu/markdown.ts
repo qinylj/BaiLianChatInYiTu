@@ -448,3 +448,314 @@ const isBlockStart = (ln: string): boolean => {
   if (/^(\s*)([-*+]|\d{1,9}[.)])\s+/.test(ln)) return true
   return false
 }
+
+/* ==================================================================== *
+ * 结构化解析：给 Word / Excel 导出用
+ *
+ * 上面两个渲染器输出的是 **字符串**（HTML / 纯文本），而生成 Office 文档需要的是
+ * **结构**：段落是什么级别、哪些文字加粗、表格有几行几列。
+ * 所以这里第三遍实现同一套块级判定 —— 这是本文件里唯一"重复"的地方，代价明确，
+ * 换来的是导出模块不必去解析 HTML（运行组件没有 DOM 解析器可用）。
+ *
+ * ★ 三份实现的语法集合必须同步。为了防漂移，自检里有一条交叉断言：
+ *   同一批样本喂给 renderMarkdown 和 parseMarkdownBlocks，
+ *   顶层标签序列必须与块类型序列一一对应（tools/verify-office-export.cjs 第 1 组）。
+ * ==================================================================== */
+
+export type MdBlock =
+  /** 标题（# 的数量 = level），公文里映射成黑体/楷体/仿宋的层级 */
+  | { type: 'heading'; level: number; text: string }
+  /** 普通段落，内部软换行保留在 text 的 \n 里 */
+  | { type: 'para'; text: string }
+  /** 列表项：已按 level 展开成扁平的项，ordered 决定用序号还是圆点，index 是本层内从 1 开始的序号 */
+  | { type: 'item'; ordered: boolean; level: number; index: number; text: string }
+  | { type: 'quote'; text: string }
+  | { type: 'code'; lang: string; code: string }
+  | { type: 'table'; head: string[]; rows: string[][]; aligns: string[] }
+  | { type: 'hr' }
+
+/** 行内片段：一段连续文字 + 它的修饰。表格单元格、段落都由它拼出来 */
+export interface MdRun {
+  text: string
+  bold?: boolean
+  italic?: boolean
+  strike?: boolean
+  code?: boolean
+  /** 链接地址。图片没有地址（Office 正文里嵌图要额外 part，这里只留 alt 文字） */
+  link?: string
+}
+
+/** 每个语法分支只声明：怎么匹配、正文取第几组、有没有需要"还回去"的前导字符 */
+interface InlineSyntax {
+  re: RegExp
+  /** 取出可读文字（图片转成 [alt]） */
+  text: (m: RegExpExecArray) => string
+  /** 匹配里被顺手吃进来的前一个正常字符（只有"前后必须非词字符"的斜体规则需要） */
+  keep?: (m: RegExpExecArray) => string
+  /** 链接地址 / 是否安全由 safeUrl 判定，返回空串表示降级成纯文字 */
+  url?: (m: RegExpExecArray) => string
+  style?: Partial<MdRun>
+}
+
+const INLINE_SYNTAX: InlineSyntax[] = [
+  {
+    // 图片必须在链接前面，否则 ![alt](url) 会被链接规则吃掉前半截
+    re: /!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+["'][^"']*["'])?\s*\)/,
+    text: m => (m[1] ? `[${m[1]}]` : '[图片]')
+  },
+  {
+    re: /\[([^\]\n]*)\]\(\s*([^)\s]+)(?:\s+["'][^"']*["'])?\s*\)/,
+    text: m => m[1] || m[2],
+    url: m => safeUrl(m[2])
+  },
+  { re: /\*\*([^*]+)\*\*/, text: m => m[1], style: { bold: true } },
+  { re: /__([^_]+)__/, text: m => m[1], style: { bold: true } },
+  { re: /~~([^~]+)~~/, text: m => m[1], style: { strike: true } },
+  {
+    // 斜体的前后必须是"非词字符"，否则 snake_case 里的下划线会被误伤
+    re: /(^|[^*\w])\*([^*\n]+)\*(?![*\w])/,
+    text: m => m[2],
+    keep: m => m[1],
+    style: { italic: true }
+  },
+  {
+    re: /(^|[^_\w])_([^_\n]+)_(?![_\w])/,
+    text: m => m[2],
+    keep: m => m[1],
+    style: { italic: true }
+  }
+]
+
+const CODE_SPAN_RE = /`([^`]+)`/g
+const codeToken = (n: number) => `\u0001c${n}\u0001`
+
+/**
+ * 把一行行内文本拆成带修饰的片段序列。
+ *
+ * 实现是"**每轮取最早出现的那个语法**"，而不是像 inline() 那样逐个 replace ——
+ * replace 链的顺序即优先级，写错了会互相吃（`![` 被 `[` 抢走之类）；
+ * 取最早匹配则天然按位置决定，语义只取决于"哪个语法先出现"。
+ *
+ * 反引号里的代码最先被摘成占位符：代码内容不参与任何强调解析
+ * （`` `a**b**` `` 里那两个星号就是两个星号）。
+ */
+export function parseInlineRuns(src: string): MdRun[] {
+  const codes: string[] = []
+  const stripped = String(src == null ? '' : src).replace(CODE_SPAN_RE, (_m, c: string) => {
+    codes.push(c)
+    return codeToken(codes.length - 1)
+  })
+
+  const out: MdRun[] = []
+
+  /** 追加一段纯文本，样式相同的相邻片段自动合并（减少 run 数量，Word 里更好编辑） */
+  const push = (text: string, style: Partial<MdRun>) => {
+    if (!text) return
+    const last = out.length ? out[out.length - 1] : null
+    if (
+      last &&
+      !!last.bold === !!style.bold &&
+      !!last.italic === !!style.italic &&
+      !!last.strike === !!style.strike &&
+      !!last.code === !!style.code &&
+      (last.link || '') === (style.link || '')
+    ) {
+      last.text += text
+      return
+    }
+    out.push({
+      text,
+      bold: style.bold,
+      italic: style.italic,
+      strike: style.strike,
+      code: style.code,
+      link: style.link
+    })
+  }
+
+  const scan = (s: string, style: Partial<MdRun>, depth: number) => {
+    if (!s) return
+    // 深度兜底：嵌套强调最多 6 层，再多就原样输出，别把病态输入变成栈溢出
+    if (depth > 6) {
+      push(s, style)
+      return
+    }
+
+    /* 代码占位符与行内语法**按位置竞争**，谁先出现谁先处理。
+       不能把占位符事先 split 掉 —— `**\u0001c0\u0001**` 会被切成
+       ['**', '0', '**']，两个星号就成了字面量，加粗丢了。 */
+    const cRe = /\u0001c(\d+)\u0001/g
+    const cm = cRe.exec(s)
+
+    let best: { syn: InlineSyntax; m: RegExpExecArray } | null = null
+    for (let i = 0; i < INLINE_SYNTAX.length; i++) {
+      const syn = INLINE_SYNTAX[i]
+      const m = syn.re.exec(s)
+      if (m && (!best || m.index < best.m.index)) best = { syn, m }
+    }
+
+    // 代码在最前：整段取出，带 code 标记（继承外层样式，让加粗里的代码仍然加粗）
+    if (cm && (!best || cm.index <= (best as { m: RegExpExecArray }).m.index)) {
+      push(s.slice(0, cm.index), style)
+      const n = Number(cm[1])
+      push(codes[n] == null ? '' : codes[n], {
+        bold: style.bold,
+        italic: style.italic,
+        strike: style.strike,
+        link: style.link,
+        code: true
+      })
+      scan(s.slice(cm.index + cm[0].length), style, depth)
+      return
+    }
+
+    if (!best) {
+      push(s, style)
+      return
+    }
+
+    const before = s.slice(0, best.m.index) + (best.syn.keep ? best.syn.keep(best.m) : '')
+    const inner = best.syn.text(best.m)
+    const after = s.slice(best.m.index + best.m[0].length)
+
+    push(before, style)
+    const url = best.syn.url ? best.syn.url(best.m) : ''
+    const innerStyle: Partial<MdRun> = {
+      bold: style.bold || !!(best.syn.style && best.syn.style.bold),
+      italic: style.italic || !!(best.syn.style && best.syn.style.italic),
+      strike: style.strike || !!(best.syn.style && best.syn.style.strike),
+      link: url || style.link
+    }
+    if (inner) scan(inner, innerStyle, depth + 1)
+    if (after) scan(after, style, depth)
+  }
+
+  scan(stripped, {}, 0)
+  return out
+}
+
+/** runs → 一行纯文字（xlsx 单元格、docx 里不需要结构时的兜底） */
+export const runsToText = (runs: MdRun[]): string => runs.map(r => r.text).join('')
+
+/** 块级解析：与 renderMarkdownToText 同一套规则，只把结果留成结构 */
+export function parseMarkdownBlocks(raw: string): MdBlock[] {
+  const src = String(raw == null ? '' : raw).replace(/\r\n?/g, '\n')
+  const lines = src.split('\n')
+  const out: MdBlock[] = []
+  let i = 0
+  /* 保险丝：与 renderMarkdownToText 同理 —— 吃的是模型输出，宁可少一块也不能死循环 */
+  let guard = 0
+
+  while (i < lines.length) {
+    if (++guard > lines.length * 4 + 64) break
+    const ln = lines[i]
+    const t = ln.trim()
+
+    if (!t) {
+      i++
+      continue
+    }
+
+    // 分割线（先于列表判断，否则 `---` 会被当成空列表项）
+    if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(ln)) {
+      out.push({ type: 'hr' })
+      i++
+      continue
+    }
+
+    // 代码块：内容原样保留（流式下未闭合的也按代码块收）
+    const fenceOpen = /^ {0,3}(?:`{3,}|~{3,})\s*([\w+#.-]*)\s*$/.exec(ln)
+    if (fenceOpen) {
+      const lang = fenceOpen[1] || ''
+      const buf: string[] = []
+      i++
+      while (i < lines.length && !/^ {0,3}(?:`{3,}|~{3,})\s*$/.test(lines[i])) {
+        buf.push(lines[i])
+        i++
+      }
+      if (i < lines.length) i++ // 吃掉收尾的 ```
+      out.push({ type: 'code', lang, code: buf.join('\n') })
+      continue
+    }
+
+    // 标题
+    const h = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(ln)
+    if (h) {
+      out.push({ type: 'heading', level: h[1].length, text: h[2] })
+      i++
+      continue
+    }
+
+    // 引用
+    if (/^ {0,3}>/.test(ln)) {
+      const buf: string[] = []
+      while (i < lines.length && /^ {0,3}>/.test(lines[i])) {
+        buf.push(lines[i].replace(/^ {0,3}>\s?/, ''))
+        i++
+      }
+      out.push({ type: 'quote', text: buf.join('\n') })
+      continue
+    }
+
+    // 表格：当前行含 | 且下一行是分隔行
+    if (t.indexOf('|') >= 0 && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      const head = splitCells(ln)
+      const aligns = splitCells(lines[i + 1]).map((c: string) =>
+        /^:-+:$/.test(c) ? 'center' : /^:-+/.test(c) ? 'left' : /-+:$/.test(c) ? 'right' : ''
+      )
+      i += 2
+      const rows: string[][] = []
+      while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') >= 0) {
+        rows.push(splitCells(lines[i]))
+        i++
+      }
+      out.push({ type: 'table', head, rows, aligns })
+      continue
+    }
+
+    // 列表：展开成带 level 的扁平项，序号在本层内自己重排（模型写的序号常跳号）
+    const li = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/.exec(ln)
+    if (li) {
+      let base = -1
+      const counters: number[] = []
+      while (i < lines.length) {
+        const m = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/.exec(lines[i])
+        if (m) {
+          const indent = m[1].replace(/\t/g, '    ').length
+          if (base < 0) base = indent
+          const level = indent <= base ? 0 : Math.min(3, Math.max(1, Math.floor((indent - base) / 2)))
+          const ordered = /\d/.test(m[2])
+          counters.length = level + 1
+          counters[level] = (counters[level] || 0) + 1
+          out.push({ type: 'item', ordered, level, index: counters[level], text: m[3] })
+          i++
+          continue
+        }
+        // 续行（缩进 ≥2 空格）：并进上一项
+        if (out.length && out[out.length - 1].type === 'item' && lines[i].trim() && /^\s{2,}/.test(lines[i])) {
+          const prev = out[out.length - 1] as Extract<MdBlock, { type: 'item' }>
+          prev.text += '\n' + lines[i].trim()
+          i++
+          continue
+        }
+        break
+      }
+      continue
+    }
+
+    // 段落：整段里的换行保留
+    const buf: string[] = []
+    while (i < lines.length && lines[i].trim()) {
+      const cur = lines[i]
+      if (isBlockStart(cur)) break
+      // 表格首行要留给主循环 —— 只有它才知道下一行是不是分隔行
+      if (cur.trim().indexOf('|') >= 0 && i + 1 < lines.length && isTableSep(lines[i + 1])) break
+      buf.push(cur.trim())
+      i++
+    }
+    if (buf.length) out.push({ type: 'para', text: buf.join('\n') })
+    else i++ // 兜底：理论上到不了这里，但绝不能原地打转
+  }
+
+  return out
+}

@@ -27,7 +27,18 @@
 | `index.vue`（运行组件） | 仅 `vue`，**不依赖 naive-ui**（保证打进大屏的包足够小） |
 | `config.vue`（设置面板） | `naive-ui`、`lodash`、工程内 `@/components/Pages/ChartItemSetting` |
 | `api.ts` / `presets.ts` / `types.ts` / `config.ts` | 无第三方依赖 |
-| `markdown.ts` / `clipboard.ts` / `exporter.ts` | 无第三方依赖（Markdown 渲染、剪贴板、导出各自自研） |
+| `markdown.ts` / `clipboard.ts` / `exporter.ts` | 无第三方依赖（Markdown 解析、剪贴板、导出各自自研） |
+| `zip.ts` / `ooxml.ts` / `docx.ts` / `xlsx.ts` / `download.ts` | 无第三方依赖 |
+
+最后一行值得多说一句：导出 Word / Excel 本来最容易变成"引一个 docx + exceljs，包体积多出几百 KB"，
+这里改成**手写 zip 头 + OOXML**（`zip.ts` 只实现 stored 模式，连压缩都不需要，
+因为压缩要调异步的 `CompressionStream`，会把整条导出链路变成 async）。
+代价是导出的文件不压缩、体积偏大（公文量级几十到几百 KB，对下载没影响），
+换来的是运行组件对外部依赖始终是零。
+
+另外 `docx.ts` 里的 OOXML **元素顺序不能随意调换** —— `w:pPr` / `w:rPr` / `w:tblPr`
+的子元素顺序是 schema 规定的，顺序错了 Word 会直接报"此文件中的内容有问题"。
+改版式时请连同 `tools/verify_ooxml.py` 一起跑（它用 Python 标准库独立验一遍产物）。
 
 ## 2. 放调试台（可选，但强烈建议）
 

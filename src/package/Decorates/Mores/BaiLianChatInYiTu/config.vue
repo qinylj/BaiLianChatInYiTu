@@ -101,6 +101,39 @@
                 />
               </div>
 
+              <!-- 消息级导出：每条回答脚注里的「导出 Word / Excel」，
+                   与顶栏「导出」的区别是只导当前这一条，不导整个会话 -->
+              <div class="sub3">
+                <div class="sub3-head">消息导出按钮</div>
+                <CustomSwitch
+                  label="显示 Word / Excel 按钮"
+                  v-model:value="optionData.showMsgExport"
+                  elMarginBottom="10px"
+                />
+                <template v-if="optionData.showMsgExport">
+                  <div class="subtitle">Word 排版</div>
+                  <CustomInputSelect
+                    label="排版预设"
+                    v-model:value="optionData.docxPreset"
+                    :options="docxPresetOptions"
+                  />
+                  <CustomInput
+                    label="公文标题字体"
+                    v-model:value="optionData.docxTitleFont"
+                    placeholder="留空 = 方正小标宋简体"
+                  />
+                  <div class="field">
+                    <div class="field-label">说明</div>
+                    <div class="tip">
+                      「标准公文格式」按 GB/T 9704—2012 排版：页边距上 37 / 下 35 / 左 28 / 右 26 mm，
+                      正文三号仿宋_GB2312，固定行距 28.8 磅，首行缩进 2 字符，标题二号小标宋居中，
+                      页脚「— 1 —」页码。<br />
+                      标题字体「方正小标宋简体」需本机已安装，未安装时 Word 会自动回退成默认字体。
+                    </div>
+                  </div>
+                </template>
+              </div>
+
               <div class="sub3">
                 <div class="sub3-head">对话前内容区</div>
                 <!-- 欢迎页四件套：图标 / 欢迎标题 / 欢迎语 / 预设问题，
@@ -796,7 +829,15 @@ const targetKindOptions = [
 const exportFormatOptions = [
   { label: 'HTML（渲染后的排版）', value: 'html' },
   { label: '纯文本（去语法符号）', value: 'txt' },
-  { label: 'Markdown 原文', value: 'md' }
+  { label: 'Markdown 原文', value: 'md' },
+  { label: 'Word 文档（.docx）', value: 'docx' },
+  { label: 'Excel 工作簿（.xlsx）', value: 'xlsx' }
+]
+
+/** Word 排版预设：公文格式是默认，普通文档给"不想要公文壳子"的场景 */
+const docxPresetOptions = [
+  { label: '标准公文格式（GB/T 9704）', value: 'gongwen' },
+  { label: '普通文档', value: 'plain' }
 ]
 
 const paramSourceOptions = [

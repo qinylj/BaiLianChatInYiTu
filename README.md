@@ -36,6 +36,16 @@
   （大屏跑在 http 下没有 Clipboard API，走的是"选中隐藏容器 + execCommand"，实测两种形态都在）
 - **导出也按渲染后的样子出**：默认 `.html` 单文件（能直接打开，也能直接粘进 Word），
   可选 `.txt`（去语法符号，带 BOM，Windows 记事本不乱码）或 `.md`（源码留档）
+- **单条回答可一键导出 Word / Excel**（按钮在「重答」旁边）：
+  - **Word 默认按党政机关公文格式排版**（GB/T 9704—2012）：页边距上 37 / 下 35 / 左 28 / 右 26 mm，
+    正文三号仿宋_GB2312，固定行距 28.8 磅（版心正好排 22 行），首行缩进 2 字符，
+    标题二号小标宋居中，页脚「— 1 —」页码；标题层级按公文的"一级黑体 / 二级楷体_GB2312 /
+    三级仿宋加粗"映射；Markdown 表格落成 **Word 真表格**（表头跨页自动重复、列宽按内容分配、
+    总宽正好铺满版心，不会因为某列内容长就把版心撑歪）。也可切换成「普通文档」预设
+  - **Excel 是「内容」一列通读 + 每个表格一个独立工作表**：表格落到真单元格（表头带底色、
+    冻结首行、列宽自适应），纯数字写成**数值**可以直接求和，前导零编号（007）保持文本不被吞成 7
+  - 两种格式都是**浏览器里现场生成**：零依赖手写 zip + OOXML（见 `zip.ts` / `docx.ts` / `xlsx.ts`），
+    不走服务端、不引第三方 Office 库 —— 运行组件是要跟着大屏一起加载的
 - 输入区支持附件入口（聚焦时出现）、Enter 发送 / Shift+Enter 换行
 
 **左侧栏**
@@ -93,17 +103,25 @@ BaiLianChatInYiTu/
 │   ├── bump-version.cjs        # 版本号命令行：查看 / 自增 / 指定
 │   ├── pack.cjs                # 把 dist 打成带版本的交付 zip（零依赖 zip 写入）
 │   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"（63 项，无需浏览器）
-│   └── verify-copy-clipboard.cjs  # 真浏览器自检：剪贴板里到底是渲染后内容还是 Markdown 原文
+│   ├── verify-copy-clipboard.cjs  # 真浏览器自检：剪贴板里到底是渲染后内容还是 Markdown 原文
+│   ├── verify-office-export.cjs   # Office 导出自检（51 项：行内解析交叉一致性 / zip 结构 / 编排）
+│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（21 项）
+│   └── verify_ooxml.py         # 用 Python 标准库交叉验证产物（zipfile 验 CRC、ElementTree 验 XML）
 └── src/
-    ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（12 个文件）
+    ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（17 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
-    │   ├── config.ts           # 默认 option（约 60 个配置项都在这里）
+    │   ├── config.ts           # 默认 option（约 65 个配置项都在这里）
     │   ├── config.vue          # 设置面板（naive-ui，分组折叠）
     │   ├── index.vue           # 运行组件（对话界面，零 UI 库依赖）
     │   ├── api.ts              # 两种协议的请求、SSE 解析、<think> 标签拆分
-    │   ├── markdown.ts         # 自研 Markdown 渲染器（零依赖，先转义再套格式）+ 纯文本版
+    │   ├── markdown.ts         # 自研 Markdown 解析（零依赖）：HTML / 纯文本 / 结构化块三种出口
     │   ├── clipboard.ts        # 复制：富文本 + 纯文本双形态，非安全上下文有兜底
-    │   ├── exporter.ts         # 导出内容构造：html / txt / md 三种形态（纯函数）
+    │   ├── zip.ts              # 零依赖 ZIP 写入器（docx / xlsx 都是 zip 包，只用 stored 模式）
+    │   ├── ooxml.ts            # OOXML 公共工具：XML 转义与非法字符清理、mm/pt/字号换算、part 拼装
+    │   ├── docx.ts             # Word 生成：公文版式常量、Markdown 块 → 段落/表格
+    │   ├── xlsx.ts             # Excel 生成：单元格样式表、表格工作表、列宽自适应
+    │   ├── download.ts         # 存盘：Blob + <a download>（非安全上下文也能用）
+    │   ├── exporter.ts         # 导出内容构造：html / txt / md / docx / xlsx
     │   ├── presets.ts          # 主题 / 背景 / 默认智能体 / 默认模型 / 默认网关
     │   ├── types.ts            # 类型定义
     │   ├── data.json           # 组件默认数据
@@ -174,17 +192,45 @@ npm run pack         # 已编译过，只想重新打 zip
 
 ---
 
-## 五、已知边界
+## 五、自检怎么跑
+
+组件的每条链路都有对应的自检，都**不需要先编译**（脚本自己用 `@babel/core`
+把 TS 现场转成可执行代码），也不需要 webpack dev server：
+
+```bash
+node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本"，63 项，纯 Node
+node tools/verify-office-export.cjs      # Word / Excel 生成，51 项 + Python 交叉验证 95 项
+node tools/verify-office-download.cjs    # 真浏览器：点按钮 → 磁盘上出现文件，21 项
+node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 9 项 / CHROME_UI=1 共 20 项）
+```
+
+两个说明：
+
+- `verify-office-export.cjs` 会调用 `tools/verify_ooxml.py`，用 **Python 标准库**把产物独立验一遍
+  （`zipfile` 算 CRC、`ElementTree` 解析 XML）。这一步不是多余的：自己写的 zip 头和自己的解析器
+  可能"一起错"，必须让另一套实现来读。没装 Python 时用 `BL_PY=<python 路径>` 指定。
+- 两个浏览器自检会各自起一个临时静态服务与 Chrome 实例（端口 8097 / 8099 与 9331 / 9333，
+  可用 `TEST_PORT` / `CDP_PORT` 覆盖），跑完自动清理。**别用 `spawnSync` 改成同步** ——
+  某些受限环境里同步 spawn 会直接报 `EBUSY`，异步没问题。
+
+## 六、已知边界
 
 - 历史会话存在浏览器 localStorage，桶名 `bailian-chat-in-yitu:<实例id>`，
   换实例或清缓存后不会恢复；旧版本使用的 `agent-chat-e01:` 桶会在新桶为空时自动迁移一次。
 - 直连大模型时没有百炼那套会话管理（createSession/deleteSession），历史只在本地。
 - 最大 Token 面板上限开到 1048576，但各家模型有自己的上限
   （如 DeepSeek-R1 官方 64K），实际按模型规格填。
+- **导出公文时的字体依赖本机安装**：标题用的「方正小标宋简体」、正文用的「仿宋_GB2312」
+  都是公文字体的标准叫法，但**不是 Windows 自带字体**。没装的话 Word 会自动回退成默认字体，
+  文档打开是正常的，只是标题不是小标宋。面板里可以把标题字体改成「黑体」这类随系统自带的字体。
+- 导出的 `.docx` / `.xlsx` 内部的 zip **不压缩**（stored），文件偏大（公文量级几十到几百 KB）。
+  这是为了避开 `CompressionStream` 的异步链路，换取导出全程同步、任何浏览器都能跑。
+- Excel 的「内容」工作表和表格工作表**列宽是分开的**：前者只有 A 列、宽度按正文调，
+  后者按各列内容自适应。所以表格数据要看「表格N」工作表，而不是「内容」里那几行速览。
 
 ---
 
-## 六、许可证
+## 七、许可证
 
 本项目以 **GPL-3.0** 协议开源，完整条款见 [`LICENSE`](./LICENSE)。
 

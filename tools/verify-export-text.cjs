@@ -42,7 +42,9 @@ const compile = name => {
   return dest
 }
 
-;['markdown.ts', 'types.ts', 'exporter.ts'].forEach(compile)
+/* exporter.ts 现在也会 import docx.ts / xlsx.ts（纯函数虽然用不到，
+   Node 解析 import 时却要求模块必须存在），所以整条依赖链都要编译出来。 */
+;['markdown.ts', 'types.ts', 'zip.ts', 'ooxml.ts', 'docx.ts', 'xlsx.ts', 'exporter.ts'].forEach(compile)
 const md = require(path.join(OUT, 'markdown.js'))
 const ex = require(path.join(OUT, 'exporter.js'))
 

@@ -303,6 +303,56 @@
                           <path d="M13.5 2.3v3.6h-3.6" />
                         </svg>
                       </button>
+                      <!-- 导出单条回答为 Office 文件：浏览器里现场生成（零依赖手写 zip + OOXML），
+                           不走服务端。Word 默认按党政机关公文格式排版（见 docx.ts）。 -->
+                      <template v-if="o.showMsgExport && m.role === 'assistant' && !m.pending && m.content">
+                        <button
+                          class="ac-act"
+                          :class="{ active: exportedKey === m.id + '|docx' }"
+                          :disabled="!!exportingId"
+                          :title="o.exportWordText"
+                          @click="exportMessage(m, 'docx')"
+                        >
+                          <svg
+                            v-if="exportedKey === m.id + '|docx'"
+                            class="ac-ico"
+                            viewBox="0 0 16 16"
+                            aria-hidden="true"
+                          >
+                            <path d="M3.4 8.5 6.4 11.5 12.7 5.2" />
+                          </svg>
+                          <!-- 文档轮廓 + 折角 + 中间的 W -->
+                          <svg v-else class="ac-ico" viewBox="0 0 16 16" aria-hidden="true">
+                            <path
+                              d="M9.2 1.9H4.7A1.7 1.7 0 0 0 3 3.6v8.8a1.7 1.7 0 0 0 1.7 1.7h6.6a1.7 1.7 0 0 0 1.7-1.7V5.5z"
+                            />
+                            <path d="M9.2 1.9v3.6h3.8" />
+                            <path d="M5.5 8.6 6.6 11.6 8 9.3l1.4 2.3 1.1-3" />
+                          </svg>
+                        </button>
+                        <button
+                          class="ac-act"
+                          :class="{ active: exportedKey === m.id + '|xlsx' }"
+                          :disabled="!!exportingId"
+                          :title="o.exportExcelText"
+                          @click="exportMessage(m, 'xlsx')"
+                        >
+                          <svg
+                            v-if="exportedKey === m.id + '|xlsx'"
+                            class="ac-ico"
+                            viewBox="0 0 16 16"
+                            aria-hidden="true"
+                          >
+                            <path d="M3.4 8.5 6.4 11.5 12.7 5.2" />
+                          </svg>
+                          <!-- 表格网格 -->
+                          <svg v-else class="ac-ico" viewBox="0 0 16 16" aria-hidden="true">
+                            <rect x="2.6" y="3.2" width="10.8" height="9.6" rx="1.6" />
+                            <path d="M2.6 6.6h10.8" />
+                            <path d="M8 6.6v6.2" />
+                          </svg>
+                        </button>
+                      </template>
                     </span>
                   </div>
                 </div>
@@ -374,6 +424,10 @@
         </main>
       </div>
     </div>
+
+    <!-- 底部浮现提示：只用于"静默失败"的点（下载被 iframe 拦截、复制不可用），
+         不做通用通知系统 —— 大屏上弹 toast 很吵，能不用就不用。 -->
+    <div v-if="toast" class="ac-toast">{{ toast }}</div>
   </div>
 </template>
 
@@ -396,8 +450,11 @@ import {
 import { renderMarkdown as formatMessage, renderMarkdownToText } from './markdown'
 // 复制：富文本 + 纯文本双形态，非安全上下文也有兜底（见 clipboard.ts）
 import { copyMessageText } from './clipboard'
-// 导出内容构造（纯函数，见 exporter.ts）：html / txt / md 三种形态
-import { buildExport } from './exporter'
+// 导出内容构造（纯函数，见 exporter.ts）：
+//   html / txt / md 产出字符串；docx / xlsx 产出字节（公文 Word、Excel 工作簿，见 docx.ts / xlsx.ts）
+import { buildExport, buildOfficeExport } from './exporter'
+// 存盘：Blob + <a download>，非安全上下文（大屏 http 内网 IP）也能用（见 download.ts）
+import { saveFile } from './download'
 import {
   AgentItem,
   ChatAttachment,
@@ -1315,25 +1372,85 @@ const vote = async (msg: ChatMessage, v: 'LIKE' | 'DISLIKE') => {
  *   html（默认）= 渲染后的排版，自包含单文件，双击可看 / 可直接粘进 Word
  *   txt  = 渲染后的纯文本，带 BOM（Windows 记事本不糊中文）
  *   md   = 原始 Markdown 源码，留档用
+ *   docx = 公文格式 Word，xlsx = Excel 工作簿（内容是字节，不是字符串）
  * 具体格式由 option.exportFormat 决定。
  */
 const exportConversation = () => {
   const conv = activeConv.value
   if (!conv || !conv.messages.length) return
-  const { fileName, content, mime } = buildExport(
-    conv,
-    o.value.exportFormat,
-    new Date().toLocaleString('zh-CN')
-  )
-  const blob = new Blob([content], { type: mime })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = fileName
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 0)
+  const res = buildExport(conv, o.value.exportFormat, new Date().toLocaleString('zh-CN'), {
+    preset: o.value.docxPreset,
+    titleFont: o.value.docxTitleFont
+  })
+  // Office 格式给的是字节，其余是字符串 —— 统一交给 saveFile 落盘
+  const data = res.bytes ? res.bytes : res.content
+  if (!saveFile(res.fileName, data, res.mime)) showToast('导出失败：浏览器拦截了下载')
+}
+
+/* ------------------------------------------------------------------ *
+ * 消息级导出（脚注里的「导出 Word / 导出 Excel」按钮）
+ * ------------------------------------------------------------------ */
+
+/** 正在生成文件的消息 id：生成是同步的，但长文档要几十毫秒，用状态兜住重复点击 */
+const exportingId = ref('')
+/** 刚导出成功的按钮，值为 `${消息id}|${格式}` —— 两个按钮各自变对勾 */
+const exportedKey = ref('')
+
+/**
+ * 把单条回答导出成 Office 文件。
+ *
+ * 两条链路都是**在浏览器里现场生成**：零依赖手写 zip + OOXML（见 zip.ts / docx.ts / xlsx.ts），
+ * 不经过服务端，也不引任何第三方 Office 库 —— 运行组件是要跟着大屏一起加载的。
+ *
+ * 文档标题这里不指定：exporter 会取正文里第一个标题当标题、并把那一行从正文摘掉，
+ * 否则同一句话会先以二号小标宋居中显示一次、下面又以一级标题显示一次，看着像出错。
+ * 正文里没有标题时才退化成"首段前 24 字"，再没有就用"文档"。
+ */
+const exportMessage = (msg: ChatMessage, kind: 'docx' | 'xlsx') => {
+  if (exportingId.value) return
+  const text = msg.content || ''
+  if (!text) return
+  exportingId.value = msg.id
+  try {
+    const res = buildOfficeExport(kind, text, {
+      preset: o.value.docxPreset,
+      titleFont: o.value.docxTitleFont,
+      meta: [`导出时间：${new Date().toLocaleString('zh-CN')}`]
+    })
+    if (!res.bytes || !res.bytes.length) throw new Error('empty')
+    if (!saveFile(res.fileName, res.bytes, res.mime)) throw new Error('blocked')
+    exportedKey.value = `${msg.id}|${kind}`
+    window.setTimeout(() => {
+      if (exportedKey.value === `${msg.id}|${kind}`) exportedKey.value = ''
+    }, 1600)
+  } catch (e) {
+    // 大屏常在 iframe 里预览，父页面没给 allow-downloads 时点击是静默无效的 ——
+    // 这种情况必须说出来，否则用户以为按钮坏了（见 download.ts 顶部说明）
+    showToast(
+      (kind === 'xlsx' ? '导出 Excel 失败' : '导出 Word 失败') +
+        '：浏览器拦截了下载，试试在新窗口打开大屏，或先复制内容'
+    )
+  } finally {
+    exportingId.value = ''
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 轻量提示条
+ * ------------------------------------------------------------------ */
+
+/**
+ * 底部浮现一行提示，2.6 秒后自动消失。
+ * 只在"静默失败"的地方用（下载被 iframe 拦截、复制不可用），不做通用通知系统。
+ */
+const toast = ref('')
+let toastTimer = 0
+const showToast = (text: string) => {
+  toast.value = text
+  if (toastTimer) window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => {
+    toast.value = ''
+  }, 2600)
 }
 
 /* ------------------------------------------------------------------ *
@@ -1453,7 +1570,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.2'
+  version: '1.0.3'
 }
 </script>
 
@@ -2464,6 +2581,45 @@ export default {
   /* 点踩 = 点赞图标翻转 180°，省一份 path */
   &.flip .ac-ico {
     transform: rotate(180deg);
+  }
+
+  /* 导出进行中：两个导出按钮一起禁用，避免同一秒内重复触发下载 */
+  &:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+}
+
+/* 底部临时提示：只在"静默失败"时出现（下载被 iframe 拦截、复制不可用），
+   2.6 秒自动消失。pointer-events:none 保证它不挡住底下的输入区。 */
+.ac-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: min(88%, 460px);
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: center;
+  color: var(--ac-text);
+  background: var(--ac-panel-solid);
+  border: 1px solid var(--ac-border-strong);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+  animation: ac-toast-in 0.18s ease-out;
+}
+
+@keyframes ac-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
   }
 }
 

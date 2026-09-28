@@ -232,7 +232,7 @@
                     <span v-if="m.pending && !m.content" class="ac-typing">
                       <i></i><i></i><i></i>
                     </span>
-                    <span v-else class="ac-md" v-html="formatMessage(m.content)"></span>
+                    <div v-else class="ac-md" v-html="formatMessage(m.content)"></div>
                     <!-- 附件：接口不支持二进制上传，这里把选中的文件以清单形式挂在气泡里 -->
                     <div v-if="m.attachments && m.attachments.length" class="ac-bubble-atts">
                       <span
@@ -391,6 +391,8 @@ import {
   sendFeedback,
   uid
 } from './api'
+// 轻量 Markdown 渲染（自研、零依赖，见 markdown.ts）：标题/列表/代码块/表格/强调等
+import { renderMarkdown as formatMessage } from './markdown'
 import {
   AgentItem,
   ChatAttachment,
@@ -1035,6 +1037,13 @@ const ensureSession = async (
 
 const onChunkInto = (msg: ChatMessage) => (chunk: StreamChunk) => {
   // 用户中途切走了会话也继续收流，增量始终写回发起时那条消息
+  /* 上游只给了 </think>、没给 <think> 时，闭合标签之前的输出其实都是思考过程。
+     流式下那段文字已经当正文渲染出去了，没法在 api 层回头改，
+     所以在收到这个标记时把已累积的正文整段挪进思考块（本片新到的正文随后接上）。 */
+  if (chunk.strayClose && msg.content) {
+    msg.thought += msg.content
+    msg.content = ''
+  }
   if (chunk.thought) msg.thought += chunk.thought
   if (chunk.text) msg.content += chunk.text
   if (chunk.image) {
@@ -1332,27 +1341,6 @@ const pad2 = (n: number) => (n < 10 ? '0' + n : String(n))
 const formatClock = (ts: number) => {
   const d = new Date(ts || Date.now())
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-}
-
-const escapeHtml = (s: string) =>
-  String(s == null ? '' : s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]
-  )
-
-const safeUrl = (u: string) => (/^(https?:\/\/|data:image\/)/i.test(String(u).trim()) ? String(u).trim() : '')
-
-/** 先整体转义再套格式，保证模型输出里带 HTML 也不会被当标签执行 */
-const formatMessage = (raw: string) => {
-  let s = escapeHtml(raw)
-  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt, url) => {
-    const u = safeUrl(url)
-    return u ? `<img class="ac-img" src="${u}" alt="${alt}" />` : ''
-  })
-  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>')
-  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-  s = s.replace(/^_(.+)_$/gm, '<em>$1</em>')
-  s = s.replace(/\n/g, '<br/>')
-  return s
 }
 
 /* ------------------------------------------------------------------ *
@@ -2247,6 +2235,159 @@ export default {
     padding: 1px 5px;
     border-radius: 4px;
     background: rgba(127, 127, 127, 0.22);
+  }
+}
+
+/* Markdown 正文（.ac-md 里是 markdown.ts 渲染出来的 HTML）
+   以前只处理了图片与行内代码，标题/列表/代码块/引用/表格全走浏览器默认样式 ——
+   模型答的是标准 Markdown，看着却像"没渲染"。这里把块级样式补齐，
+   同时把间距压紧，避免一条回答被默认 margin 撑得很松散。 */
+.ac-md {
+  display: block;
+  word-break: break-word;
+
+  :deep(> *:first-child) {
+    margin-top: 0;
+  }
+
+  :deep(> *:last-child) {
+    margin-bottom: 0;
+  }
+
+  :deep(p) {
+    margin: 0 0 6px;
+  }
+
+  :deep(h1),
+  :deep(h2),
+  :deep(h3),
+  :deep(h4),
+  :deep(h5),
+  :deep(h6) {
+    margin: 9px 0 5px;
+    font-weight: 700;
+    line-height: 1.35;
+    color: var(--ac-text);
+  }
+
+  :deep(h1) {
+    font-size: 1.32em;
+    padding-bottom: 3px;
+    border-bottom: 1px solid var(--ac-border);
+  }
+
+  :deep(h2) {
+    font-size: 1.18em;
+  }
+
+  :deep(h3) {
+    font-size: 1.06em;
+  }
+
+  :deep(h4),
+  :deep(h5),
+  :deep(h6) {
+    font-size: 1em;
+    color: var(--ac-text-dim);
+  }
+
+  :deep(ul),
+  :deep(ol) {
+    margin: 4px 0 6px;
+    padding-left: 1.6em;
+  }
+
+  :deep(ul) {
+    list-style: disc;
+  }
+
+  :deep(ol) {
+    list-style: decimal;
+  }
+
+  :deep(li) {
+    margin: 2px 0;
+  }
+
+  :deep(li > ul),
+  :deep(li > ol) {
+    margin: 2px 0 0;
+  }
+
+  :deep(blockquote) {
+    margin: 6px 0;
+    padding: 4px 10px;
+    border-left: 3px solid var(--ac-accent-border);
+    border-radius: 0 4px 4px 0;
+    background: var(--ac-accent-soft);
+    color: var(--ac-text-dim);
+  }
+
+  :deep(hr) {
+    margin: 10px 0;
+    border: 0;
+    border-top: 1px solid var(--ac-border);
+  }
+
+  :deep(a) {
+    color: var(--ac-accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  :deep(strong) {
+    font-weight: 700;
+    color: var(--ac-text);
+  }
+
+  :deep(del) {
+    opacity: 0.62;
+  }
+
+  /* 代码块：整块底色 + 独立滚动，别让长行把气泡撑破 */
+  :deep(pre.ac-pre) {
+    margin: 6px 0;
+    padding: 8px 10px;
+    border: 1px solid var(--ac-border);
+    border-radius: 6px;
+    background: rgba(127, 127, 127, 0.16);
+    overflow: auto;
+    max-height: 260px;
+    font-family: Consolas, Monaco, monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+
+    code {
+      padding: 0;
+      background: none;
+      font-size: inherit;
+      white-space: pre;
+    }
+  }
+
+  /* 表格：包一层滚动容器，窄气泡里也能左右拖 */
+  :deep(.ac-table-wrap) {
+    margin: 6px 0;
+    max-width: 100%;
+    overflow: auto;
+  }
+
+  :deep(table) {
+    border-collapse: collapse;
+    font-size: 0.96em;
+  }
+
+  :deep(th),
+  :deep(td) {
+    padding: 3px 9px;
+    border: 1px solid var(--ac-border);
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  :deep(th) {
+    font-weight: 600;
+    background: var(--ac-panel2);
   }
 }
 

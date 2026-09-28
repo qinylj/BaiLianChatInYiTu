@@ -168,6 +168,7 @@ function readTextOf(item: any): string {
 const EMPTY_CHUNK = (): StreamChunk => ({
   text: '',
   thought: '',
+  strayClose: false,
   image: '',
   end: false,
   error: '',
@@ -233,6 +234,141 @@ export function extractOpenAIChunk(raw: any): StreamChunk {
   if (typeof delta.reasoning_content === 'string') out.thought += delta.reasoning_content
   out.end = choice.finish_reason != null || choice.delta === undefined
   out.usage = raw.usage || null
+  return out
+}
+
+/* ------------------------ 正文里的 <think> 标签 ------------------------ */
+
+/**
+ * 有些模型（尤其经网关转发之后）不把思考过程放进 reasoning_content 字段，
+ * 而是直接写在正文里：`<think>……思考……</think>真正的回答`。
+ * 后果是思考内容与 `<think>` 标签一起被当正文显示在气泡里，非常难看。
+ *
+ * 还会遇到两种残缺形态，都得兜住：
+ *  ① 只有 `</think>` 没有 `<think>`（上游把开标签挪走了）—— 闭合标签之前的那段就是思考；
+ *  ② 流式分片把标签切成两半（`<thi` + `nk>`，甚至 `<` + `think>`）—— 所以必须带状态，
+ *     并把"可能是标签开头"的尾巴先扣住，等下一片到齐再判断。
+ * 收尾时仍未闭合的残片按当前状态吐出来 —— 宁可多显示几个字符，也不能吞内容。
+ */
+export function createThinkSplitter() {
+  const OPEN_RE = /<think\b[^>]*>/i
+  const CLOSE_RE = /<\/think\s*>/i
+  const OPEN_HEAD = '<think'
+  const CLOSE_HEAD = '</think'
+  /** 标签最长可能被切成的悬空长度上限，超过就不再当标签，直接按正文吐 */
+  const HOLD_MAX = 32
+
+  let inThink = false
+  let carry = ''
+  let text = ''
+  let thought = ''
+
+  const emitTo = (target: 'text' | 'thought', s: string) => {
+    if (!s) return
+    if (target === 'thought') thought += s
+    else text += s
+  }
+
+  /**
+   * buf 末尾有多少字符需要扣住（等下一片）：
+   *  ① 已经出现 head，但 `>` 还没到 —— 标签被切在中间；
+   *  ② 末尾只是 head 的前几个字符（`<`、`<t`…）—— 可能是标签的开头。
+   */
+  const holdLen = (buf: string, head: string) => {
+    const low = buf.toLowerCase()
+    const i = low.lastIndexOf(head)
+    if (i >= 0) {
+      if (buf.indexOf('>', i + head.length) < 0 && buf.length - i <= HOLD_MAX) return buf.length - i
+      return 0
+    }
+    const max = Math.min(buf.length, head.length - 1)
+    for (let n = max; n > 0; n--) {
+      if (low.slice(buf.length - n) === head.slice(0, n)) return n
+    }
+    return 0
+  }
+
+  /** 喂一片正文增量，返回本片里"属于正文"和"属于思考"的两段文本 */
+  const feed = (piece: string) => {
+    text = ''
+    thought = ''
+    let stray = false
+    let buf = carry + String(piece == null ? '' : piece)
+    carry = ''
+    while (buf) {
+      const open = OPEN_RE.exec(buf)
+      const close = CLOSE_RE.exec(buf)
+      if (inThink) {
+        if (close) {
+          emitTo('thought', buf.slice(0, close.index))
+          inThink = false
+          buf = buf.slice(close.index + close[0].length)
+          continue
+        }
+      } else {
+        // 只有闭合标签：它前面那段没有开标签的文本，就是被上游剥掉开标签的思考过程
+        if (close && (!open || close.index < open.index)) {
+          emitTo('thought', buf.slice(0, close.index))
+          // 流式下"之前那些分片"已经当正文发出去了，这里只能打个标记，由上层回挪
+          stray = true
+          buf = buf.slice(close.index + close[0].length)
+          continue
+        }
+        if (open) {
+          emitTo('text', buf.slice(0, open.index))
+          inThink = true
+          buf = buf.slice(open.index + open[0].length)
+          continue
+        }
+      }
+      const hold = inThink
+        ? holdLen(buf, CLOSE_HEAD)
+        : Math.max(holdLen(buf, OPEN_HEAD), holdLen(buf, CLOSE_HEAD))
+      if (hold > 0) {
+        emitTo(inThink ? 'thought' : 'text', buf.slice(0, buf.length - hold))
+        carry = buf.slice(buf.length - hold)
+      } else {
+        emitTo(inThink ? 'thought' : 'text', buf)
+      }
+      buf = ''
+    }
+    return { text, thought, strayClose: stray }
+  }
+
+  /** 流结束：把扣住的残片放出来（残片是半个标签时不会被认成标签，正好当正文/思考处理） */
+  const flush = () => {
+    text = ''
+    thought = ''
+    if (carry) {
+      emitTo(inThink ? 'thought' : 'text', carry)
+      carry = ''
+    }
+    return { text, thought }
+  }
+
+  return { feed, flush, isInThink: () => inThink }
+}
+
+export type ThinkSplitter = ReturnType<typeof createThinkSplitter>
+
+/** 把一块增量里的 `<think>` 内容挪到 thought；就地改写并返回同一对象 */
+const splitThinkInPlace = (sp: ThinkSplitter, chunk: StreamChunk): StreamChunk => {
+  if (chunk.text) {
+    const parts = sp.feed(chunk.text)
+    chunk.text = parts.text
+    chunk.thought += parts.thought
+    if (parts.strayClose) chunk.strayClose = true
+  }
+  return chunk
+}
+
+/** 流结束时收尾：把被扣住的残片拼成一块新增量（没有残片则返回 null） */
+const drainThink = (sp: ThinkSplitter): StreamChunk | null => {
+  const rest = sp.flush()
+  if (!rest.text && !rest.thought) return null
+  const out = EMPTY_CHUNK()
+  out.text = rest.text
+  out.thought = rest.thought
   return out
 }
 
@@ -350,6 +486,14 @@ export async function runAgent(
           for (const item of items) chunk.thought += readTextOf(item)
         }
       }
+      // 正文里若混了 <think> 标签（有些模型用标签表达思考），一并挪进思考内容
+      const sp = createThinkSplitter()
+      splitThinkInPlace(sp, chunk)
+      const rest = drainThink(sp)
+      if (rest) {
+        chunk.text += rest.text
+        chunk.thought += rest.thought
+      }
       chunk.end = true
       track(chunk)
       onChunk(chunk)
@@ -361,6 +505,7 @@ export async function runAgent(
     if (!reader) throw new Error('当前环境不支持流式读取（response.body 不可用）')
     const decoder = new TextDecoder('utf-8')
     let errored = ''
+    const sp = createThinkSplitter()
     const parser = createSseParser(payload => {
       let json: any = null
       try {
@@ -368,9 +513,9 @@ export async function runAgent(
       } catch (e) {
         return // 非 JSON 的 data 行直接跳过
       }
-      const chunk = extractBailianChunk(json)
+      const chunk = splitThinkInPlace(sp, extractBailianChunk(json))
       if (chunk.error) errored += chunk.error
-      if (chunk.text || chunk.thought || chunk.image || chunk.end) {
+      if (chunk.text || chunk.thought || chunk.strayClose || chunk.image || chunk.end) {
         track(chunk)
         onChunk(chunk)
       }
@@ -382,6 +527,8 @@ export async function runAgent(
       parser.push(decoder.decode(value, { stream: true }))
     }
     parser.flush()
+    const rest = drainThink(sp)
+    if (rest && (rest.text || rest.thought)) onChunk(rest)
 
     if (errored) throw new Error(errored)
     const tail = EMPTY_CHUNK()
@@ -537,6 +684,14 @@ export async function runModel(
       chunk.text = (choice.message && choice.message.content) || ''
       chunk.thought = (choice.message && choice.message.reasoning_content) || ''
       chunk.usage = json.usage || null
+      // 正文里带 <think> 标签的，一并挪到思考内容（一次性返回时同样适用）
+      const sp = createThinkSplitter()
+      splitThinkInPlace(sp, chunk)
+      const rest = drainThink(sp)
+      if (rest) {
+        chunk.text += rest.text
+        chunk.thought += rest.thought
+      }
       chunk.end = true
       onChunk(chunk)
       return
@@ -546,6 +701,7 @@ export async function runModel(
     if (!reader) throw new Error('当前环境不支持流式读取（response.body 不可用）')
     const decoder = new TextDecoder('utf-8')
     let errored = ''
+    const sp = createThinkSplitter()
     const parser = createSseParser(payload => {
       let json: any = null
       try {
@@ -553,9 +709,9 @@ export async function runModel(
       } catch (e) {
         return
       }
-      const chunk = extractOpenAIChunk(json)
+      const chunk = splitThinkInPlace(sp, extractOpenAIChunk(json))
       if (chunk.error) errored += chunk.error
-      if (chunk.text || chunk.thought) onChunk(chunk)
+      if (chunk.text || chunk.thought || chunk.strayClose) onChunk(chunk)
     })
 
     while (true) {
@@ -564,6 +720,8 @@ export async function runModel(
       parser.push(decoder.decode(value, { stream: true }))
     }
     parser.flush()
+    const rest = drainThink(sp)
+    if (rest && (rest.text || rest.thought)) onChunk(rest)
 
     if (errored) throw new Error(errored)
     const tail = EMPTY_CHUNK()

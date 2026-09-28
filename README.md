@@ -21,6 +21,14 @@
 - 流式输出（SSE），边生成边渲染；生成中发送键变停止键，可随时中断
 - 支持**思考过程**：OpenAI 兼容取 `delta.reasoning_content`，百炼取 object/type 含 `thought` 的分片；
   生成中自动展开、完成后折叠；关掉只是不渲染，重新打开仍能看到历史轮次的思考
+- **思考过程写在正文里也认**：有些模型经网关转发后不填 `reasoning_content`，
+  而是直接输出 `<think>…</think>真正的回答`。组件会把标签里的内容自动挪进思考块，
+  标签被流式切断（`<thi` + `nk>`）也能正确识别；只有 `</think>` 没有 `<think>` 时，
+  闭合标签之前的那段同样归入思考
+- **正文按 Markdown 渲染**：标题、有序/无序列表（可嵌套）、引用、分割线、代码块、
+  表格、加粗/斜体/删除线、行内代码、链接、图片。自研渲染器零依赖（见 `markdown.ts`），
+  **先转义再套格式**，模型输出里带 HTML 只会按字面显示，不会被当标签执行；
+  流式下半截语法（未闭合的 ``` 、半个 `**`）也不会把符号当正文吐出来
 - 首轮自动创建会话；上下文可携带指定条数的历史消息
 - 消息操作：复制 / 点赞 / 点踩 / 重新回答（hover 显示，按角色左右对齐）
 - 输入区支持附件入口（聚焦时出现）、Enter 发送 / Shift+Enter 换行
@@ -75,12 +83,13 @@ BaiLianChatInYiTu/
 │   ├── README.md               # 放进宿主工程的集成步骤
 │   └── yitu-base-components.patch   # 对宿主工程的全部改动（6 文件 / 49 行新增）
 └── src/
-    ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（9 个文件）
+    ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（10 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
     │   ├── config.ts           # 默认 option（约 60 个配置项都在这里）
     │   ├── config.vue          # 设置面板（naive-ui，分组折叠）
     │   ├── index.vue           # 运行组件（对话界面，零 UI 库依赖）
-    │   ├── api.ts              # 两种协议的请求与 SSE 解析
+    │   ├── api.ts              # 两种协议的请求、SSE 解析、<think> 标签拆分
+    │   ├── markdown.ts         # 自研 Markdown 渲染器（零依赖，先转义再套格式）
     │   ├── presets.ts          # 主题 / 背景 / 默认智能体 / 默认模型 / 默认网关
     │   ├── types.ts            # 类型定义
     │   ├── data.json           # 组件默认数据

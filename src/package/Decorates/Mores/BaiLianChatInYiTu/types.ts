@@ -235,6 +235,12 @@ export interface StreamChunk {
   text: string
   /** 思考过程增量 */
   thought: string
+  /**
+   * 出现了「只有 </think>、没有 <think>」的游离闭合标签。
+   * 这种输出里，闭合标签**之前**已经当成正文流出去的内容其实全是思考过程；
+   * 流式下无法回头改已渲染的文本，所以由上层按此标记把已累积的正文挪进思考块。
+   */
+  strayClose?: boolean
   /** 图片地址 */
   image: string
   /** 是否结束 */

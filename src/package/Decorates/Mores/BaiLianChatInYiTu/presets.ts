@@ -454,7 +454,7 @@ export const DEFAULT_MODELS: ModelItem[] = [
  *   这里的 apiKey / timeoutMs 仅作兜底与旧配置迁移源，面板上不再直接展示。
  */
 export const DEFAULT_GATEWAY = {
-  baseUrl: 'http://23.210.227.120:80/xlm-gateway-flzlsf/sfm-api-gateway/gateway/agent/api',
+  baseUrl: 'http://23.210.227.120:80/xlm-gateway-ftlzsf/sfm-api-gateway/gateway/agent/api',
   apiKey: '',
   timeoutMs: 120000,
   paths: {

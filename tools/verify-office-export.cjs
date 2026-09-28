@@ -8,6 +8,8 @@
  *   【2】块级解析与导出编排（标题自动提取、文件名、空内容兜底），
  *        外加三条排版回归：手动换行符必须换成回车（每行独立成段、段段两端对齐）、
  *        分割线不落地、消息级 TXT / MD 两种文本出口的收尾与逐字节一致性
+ *   【2.5】层次序数换字体（一、/（一）/1./（1），可越级）+ 多余空格清理
+ *        （中英文之间、数字前后的空格不能误伤）
  *   【3】zip 结构自解析 —— 用独立的解析代码读回中央目录，逐个核对 CRC 与大小
  *   【4】调用 tools/verify_ooxml.py（zipfile + ElementTree）做跨语言交叉验证
  *   【5】Node 产物落盘位置与体积
@@ -117,6 +119,42 @@ const SOFT_BREAK_SAMPLE =
 /* 多行代码：代码块**不拆段**（换行是代码本身的结构），仍是同一个段落里的 <w:br/> */
 const CODE_BREAK_SAMPLE = '```bash\nsystemctl status emergency-response\nsystemctl restart emergency-response\n```'
 
+/* 层次序数与多余空格样本：四种序数各来一行（含越级），中间夹着模型爱写的
+   "用空格摆版式"的短句块，以及两条**不能动**的空格（中英文之间 / 数字前后）。
+   用空格摆版式是这次要修的第二个问题：网页上还看得出是对齐，到 Word 里就是满篇多余空格。 */
+const ORDINAL_SAMPLE = [
+  '一、总体要求',
+  '',
+  '（一）指导思想',
+  '',
+  '1.工作原则',
+  '',
+  '（1）坚持预防为主',
+  '',
+  '总指挥：   企业主要负责人',
+  '成员：  生产、安全、环保等部门负责人',
+  '',
+  '  第一章　　总则   ',
+  '',
+  '依据 GB/T 9704 标准编制，共 30 人参与。',
+  '',
+  '代码里的空格不能动：`a  b  c`'
+].join('\n')
+
+/* ------------------------------ XML 小工具 ------------------------------ */
+
+/** 取 document.xml 里的各段（按 <w:p> 切开；够用，且不必引 XML 解析器） */
+const parasOf = xml => xml.split('<w:p>').slice(1)
+const jcOf = p => (p.match(/<w:jc [^/]*\/>/) || ['(无 jc)'])[0]
+/** 段落里的可见文字：按 <w:br/> 分段拼，软换行还原成 \n（否则两行会粘成一行） */
+const textOf = p =>
+  p
+    .split('<w:br/>')
+    .map(seg => (seg.match(/<w:t[^>]*>[\s\S]*?<\/w:t>/g) || []).map(t => t.replace(/<[^>]+>/g, '')).join(''))
+    .join('\n')
+/** 段落里第一个 run 的东亚字体（层次序数换的就是这个） */
+const fontOf = p => (p.match(/w:eastAsia="([^"]+)"/) || ['', '(无)'])[1]
+
 /* ------------------------------ 【1】行内交叉一致性 ------------------------------ */
 
 const INLINE_CASES = [
@@ -163,7 +201,12 @@ function groupInline(md) {
     const viaHtml = md.renderMarkdown(s)
     // renderMarkdown 对单个行内片段会包成 <p>，去掉外层
     const bare = viaHtml.replace(/^<p>/, '').replace(/<\/p>$/, '').replace(/<br\/>/g, '\n')
-    const viaRuns = runsToHtml(md.parseInlineRuns(s), md.escapeHtml)
+    /* ★ 两条链路都要先过**块级解析**再比：
+       renderMarkdown 在取段落内容时会做空白清理（squeezeSpaces），
+       直接拿原始字符串喂 parseInlineRuns 比的就不是同一份输入了。 */
+    const blk = md.parseMarkdownBlocks(s)
+    const line = blk.length && (blk[0].type === 'para' || blk[0].type === 'heading') ? blk[0].text : s
+    const viaRuns = runsToHtml(md.parseInlineRuns(line), md.escapeHtml)
     if (bare === viaRuns) same++
     else check('行内一致：' + JSON.stringify(s), false, { html: bare, runs: viaRuns })
   })
@@ -264,18 +307,6 @@ function groupBlocks(md, exporter) {
   check('只有表格的输入也能生成文档', onlyTable.bytes.length > 0)
 
   /* ---------- ★ 排版回归一：手动换行符必须换成回车 ---------- */
-
-  /** 取 document.xml 里的各段（按 <w:p> 切开；够用，且不必引 XML 解析器） */
-  const parasOf = xml => xml.split('<w:p>').slice(1)
-  const jcOf = p => (p.match(/<w:jc [^/]*\/>/) || ['(无 jc)'])[0]
-  /** 段落里的可见文字：按 <w:br/> 分段拼，软换行还原成 \n（否则两行会粘成一行） */
-  const textOf = p =>
-    p
-      .split('<w:br/>')
-      .map(seg =>
-        (seg.match(/<w:t[^>]*>[\s\S]*?<\/w:t>/g) || []).map(t => t.replace(/<[^>]+>/g, '')).join('')
-      )
-      .join('\n')
 
   /* 模型很爱写"一句一行"，它们在 Markdown 里属于**同一个**段落（text 里的 \n）。
      如果照直转成同一个 <w:p> 里的 <w:br/>，Word 的两端对齐会把每个短行都拉到版心宽。 */
@@ -405,6 +436,109 @@ function groupBlocks(md, exporter) {
   const emptyMd = exporter.buildMessageMarkdown(null)
   check('MD 空内容不报错（内容为空串，文件名走兜底）',
     emptyMd.content === '' && /^文档_\d{8}-\d{4}\.md$/.test(emptyMd.fileName), emptyMd.fileName)
+}
+
+/* ------------------------------ 【2.5】层次序数 + 空格清理 ------------------------------ */
+
+/**
+ * 两件事：
+ *   1. 公文正文的层次靠**行首序数**（一、/（一）/1./（1））区分字体，序数可以越级；
+ *   2. 模型爱用空格摆版式（`总指挥：   企业主要负责人`），导出前要清掉，
+ *      但中英文之间、数字前后的空格是正常写法，**不能**误伤。
+ */
+function groupOrdinal(docx, exporter) {
+  section('【2.5】层次序数换字体 + 多余空格清理')
+
+  /* ---- 序数识别（纯函数，先单独验一遍，再验它在 Word 里的效果） ---- */
+  const ORDINAL_CASES = [
+    ['一、总体要求', 1, '中文数字 + 顿号'],
+    ['十一、附则', 1, '多位中文数字'],
+    ['一. 总则', 1, '中文数字 + 半角点'],
+    ['（一）指导思想', 2, '全角括号 + 中文数字'],
+    ['(二) 组织机构', 2, '半角括号 + 中文数字'],
+    ['1.工作原则', 3, '阿拉伯数字 + 点（无空格）'],
+    ['12、工作分工', 3, '阿拉伯数字 + 顿号'],
+    ['（1）坚持预防为主', 4, '括号 + 阿拉伯数字'],
+    ['(3) 工作要求', 4, '半角括号 + 阿拉伯数字'],
+    ['**一、加粗的序数也要认出来**', 1, '序数外套了加粗标记'],
+    ['一律不得违规操作', 0, '「一」后面不是顿号 → 不是序数'],
+    ['（附件）材料清单', 0, '括号里不是数字 → 不是序数'],
+    ['3.5 万元经费', 0, '小数不是第三层'],
+    ['第一章 总则', 0, '「第X章」不是层次序数'],
+    ['', 0, '空行']
+  ]
+  let bad = []
+  ORDINAL_CASES.forEach(([text, want, why]) => {
+    const got = docx.ordinalLevel(text)
+    if (got !== want) bad.push({ text, want, got, why })
+  })
+  check('序数识别：' + ORDINAL_CASES.length + ' 个样本（含 5 个反例）全部正确',
+    bad.length === 0, bad)
+
+  /* ---- Word 里真的换字体了吗 ---- */
+  const xml = readZipEntry(
+    Buffer.from(exporter.buildOfficeExport(ORDINAL_SAMPLE, {
+      title: '层次序数',
+      preset: 'gongwen',
+      when: new Date(2026, 8, 28, 22, 30)
+    }).bytes),
+    'word/document.xml'
+  ).toString('utf8')
+  const paras = parasOf(xml)
+  const texts = paras.map(textOf)
+  const fontAt = t => {
+    const i = texts.indexOf(t)
+    return i < 0 ? '(没有这一段)' : fontOf(paras[i])
+  }
+
+  check('第一层「一、」→ 方正黑体_GBK', fontAt('一、总体要求') === '方正黑体_GBK', fontAt('一、总体要求'))
+  check('第二层「（一）」→ 方正楷体_GBK', fontAt('（一）指导思想') === '方正楷体_GBK', fontAt('（一）指导思想'))
+  check('第三层「1.」→ 方正仿宋_GBK', fontAt('1.工作原则') === '方正仿宋_GBK', fontAt('1.工作原则'))
+  check('第四层「（1）」→ 方正仿宋_GBK', fontAt('（1）坚持预防为主') === '方正仿宋_GBK', fontAt('（1）坚持预防为主'))
+  check('越级使用不影响判断（一、之后直接上（1），各自按自己的档）',
+    fontAt('（1）坚持预防为主') === '方正仿宋_GBK', texts.slice(0, 8))
+
+  /* 没有序数的正文行仍是正文字体，不能被误判 */
+  check('没有序数的正文行仍是方正仿宋_GBK',
+    fontAt('总指挥：企业主要负责人') === '方正仿宋_GBK', fontAt('总指挥：企业主要负责人'))
+
+  /* ---- 空格清理 ---- */
+  check('用空格对齐的短句被合并（总指挥：   企业主要负责人）',
+    texts.indexOf('总指挥：企业主要负责人') >= 0, texts.filter(t => /总指挥/.test(t)))
+  check('「成员：  生产、安全…」里的多余空格被清掉',
+    texts.indexOf('成员：生产、安全、环保等部门负责人') >= 0, texts.filter(t => /成员/.test(t)))
+  check('全角空格与行首行尾空白都被清掉（「  第一章　　总则   」→「第一章总则」）',
+    texts.indexOf('第一章总则') >= 0, texts.filter(t => /第一章/.test(t)))
+
+  /* 反向：不该动的空格一个都没动 */
+  check('中英文之间、数字前后的空格保留（依据 GB/T 9704 标准编制，共 30 人参与。）',
+    texts.indexOf('依据 GB/T 9704 标准编制，共 30 人参与。') >= 0,
+    texts.filter(t => /GB/.test(t)))
+  check('行内代码里的空格原样保留（`a  b  c`）',
+    texts.indexOf('代码里的空格不能动：a  b  c') >= 0, texts.filter(t => /代码里/.test(t)))
+  check('代码内容在 XML 里带 xml:space="preserve"（否则 Word 会吞掉空格）',
+    /<w:t xml:space="preserve">a  b  c<\/w:t>/.test(xml), (xml.match(/<w:t[^>]*>a[^<]*<\/w:t>/) || [])[0])
+
+  /* 全篇：除了那段代码，不许出现连续两个空格或全角空格 */
+  const nonCode = texts.filter(t => t.indexOf('a  b  c') < 0)
+  check('全篇再没有连续空格 / 全角空格（代码段除外）',
+    !nonCode.some(t => /[ \t]{2,}|\u3000/.test(t)), nonCode.filter(t => /[ \t]{2,}|\u3000/.test(t)))
+  check('正文里没有残留 Markdown 加粗标记', !/\*\*/.test(xml))
+
+  /* ---- 普通文档预设不受影响（层次字体只对公文生效） ---- */
+  const plainXml = readZipEntry(
+    Buffer.from(exporter.buildOfficeExport(ORDINAL_SAMPLE, {
+      title: '普通', preset: 'plain', when: new Date(2026, 8, 28, 22, 30)
+    }).bytes),
+    'word/document.xml'
+  ).toString('utf8')
+  const plainFonts = new Set()
+  parasOf(plainXml).forEach(p => plainFonts.add(fontOf(p)))
+  check('普通文档预设不套用公文层次字体（仍是宋体）',
+    !Array.from(plainFonts).some(f => /方正/.test(f)), Array.from(plainFonts))
+  check('普通文档预设同样会清理多余空格',
+    parasOf(plainXml).map(textOf).indexOf('总指挥：企业主要负责人') >= 0,
+    parasOf(plainXml).map(textOf).filter(t => /总指挥/.test(t)))
 }
 
 /* ------------------------------ 【3】zip 自解析 ------------------------------ */
@@ -594,6 +728,12 @@ function groupArtifacts(exporter) {
     ['case-softbreak.docx', exporter.buildOfficeExport(SOFT_BREAK_SAMPLE, {
       title: '软换行段落',
       when: new Date(2026, 8, 28, 17, 30)
+    })],
+    // 给 Python 侧验层次序数字体与空格清理
+    ['case-ordinal.docx', exporter.buildOfficeExport(ORDINAL_SAMPLE, {
+      title: '层次序数',
+      preset: 'gongwen',
+      when: new Date(2026, 8, 28, 22, 30)
     })]
   ]
 
@@ -642,10 +782,12 @@ async function main() {
   compile()
   const md = require(path.join(TMP, 'markdown.js'))
   const zip = require(path.join(TMP, 'zip.js'))
+  const docx = require(path.join(TMP, 'docx.js'))
   const exporter = require(path.join(TMP, 'exporter.js'))
 
   groupInline(md)
   groupBlocks(md, exporter)
+  groupOrdinal(docx, exporter)
   groupZip(zip)
   groupArtifacts(exporter)
   await groupPython()

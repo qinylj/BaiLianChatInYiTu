@@ -49,9 +49,13 @@ const SAMPLE = [
   '',
   '本预案适用于本单位**危险化学品**突发泄漏事故的应急处置。',
   '',
+  '一、总体要求',
+  '',
+  '（一）指导思想',
+  '',
   '应急指挥部',
-  '总指挥：企业主要负责人',
-  '成员：生产、安全、环保、医疗等部门负责人',
+  '总指挥：   企业主要负责人',
+  '成员：  生产、安全、环保、医疗等部门负责人',
   '',
   '- 液氯、硫酸等剧毒强腐蚀品的储存环节',
   '- 生产装置区的泄漏事故',
@@ -441,10 +445,30 @@ async function main() {
         const names = entries.map(e => e.name)
         check('含 word/document.xml', names.indexOf('word/document.xml') >= 0, names.slice(0, 6))
         const doc = readZipEntry(buf, 'word/document.xml').toString('utf8')
-        check('正文里带公文页边距（top=2098 twips = 37mm）', /w:top="2098"/.test(doc))
-        check('正文里带三号仿宋_GB2312', /仿宋_GB2312/.test(doc))
-        check('正文里带二号小标宋标题', /方正小标宋简体/.test(doc))
+        check('正文里带公文页边距（top=1984 twips = 3.5cm / left=1446 = 2.55cm）',
+          /w:top="1984"/.test(doc) && /w:left="1446"/.test(doc))
+        check('正文里带固定行距 29.7 磅（w:line="594" lineRule="exact"）',
+          /w:line="594" w:lineRule="exact"/.test(doc))
+        check('正文与层次字体是方正字族（仿宋_GBK / 黑体_GBK / 楷体_GBK）',
+          /方正仿宋_GBK/.test(doc) && /方正黑体_GBK/.test(doc) && /方正楷体_GBK/.test(doc))
+        check('标题是方正小标宋_GBK 二号', /方正小标宋_GBK/.test(doc))
         check('正文里没有残留 Markdown 加粗符号', !/\*\*/.test(doc))
+
+        /* 层次序数 → 字体：落盘产物上独立复算一遍（不依赖页面里的中间结果） */
+        const paraWith = t => doc.split('<w:p>').slice(1).find(p => p.indexOf(t) >= 0) || ''
+        check('第一层「一、总体要求」用方正黑体_GBK',
+          /方正黑体_GBK/.test(paraWith('一、总体要求')))
+        check('第二层「（一）指导思想」用方正楷体_GBK',
+          /方正楷体_GBK/.test(paraWith('（一）指导思想')))
+
+        /* 多余空格：落盘产物里必须已经被清掉（只看 <w:t> 里的真实文本，不看 XML 排版） */
+        const tNodes = (doc.match(/<w:t[^>]*>[\s\S]*?<\/w:t>/g) || []).map(t =>
+          t.replace(/<[^>]+>/g, '')
+        )
+        check('用空格摆版式的短句在落盘文件里已被合并（总指挥：   企业… → 无空格）',
+          doc.indexOf('总指挥：企业主要负责人') >= 0, doc.indexOf('总指挥：企业主要负责人'))
+        check('正文文本里没有连续两个空格、也没有全角空格（U+3000）',
+          !tNodes.some(t => /  |\u3000/.test(t)), tNodes.filter(t => /  |\u3000/.test(t)))
 
         /* 落盘产物上再验一次本轮修复：手动换行符换成了回车、段落仍是两端对齐 */
         check('手动换行符换成了回车（落盘正文里 <w:br/> 数为 0）', doc.indexOf('<w:br/>') < 0)
@@ -493,6 +517,9 @@ async function main() {
         JSON.stringify(text.slice(0, 40)))
       check('没有残留 Markdown 语法符号与分割线横杠',
         text.indexOf('**') < 0 && text.indexOf('----------') < 0, JSON.stringify(text.slice(0, 160)))
+      check('多余空格也被清掉（TXT 与 Word 同一套口径）',
+        text.indexOf('总指挥：企业主要负责人') >= 0 && !/  /.test(text),
+        JSON.stringify((text.match(/.*总指挥.*/g) || []).slice(0, 2)))
       check('表格被拍平成可读文本（表头与单元格都在）',
         /姓名 \| 危险特性/.test(text) && /液氯/.test(text))
     }
@@ -527,6 +554,9 @@ async function main() {
       check('Markdown 语法符号都还在（** 与表格分隔行）',
         buf.toString('utf8').indexOf('**危险化学品**') >= 0 &&
           buf.toString('utf8').indexOf('| --- |') >= 0)
+      check('★ 多余空格原样保留（渲染**前**是原数据，绝不清理）',
+        buf.toString('utf8').indexOf('总指挥：   企业主要负责人') >= 0,
+        JSON.stringify((buf.toString('utf8').match(/.*总指挥.*/g) || []).slice(0, 1)))
     }
 
     /* ---------------- D. 三个文件都留下了 ---------------- */

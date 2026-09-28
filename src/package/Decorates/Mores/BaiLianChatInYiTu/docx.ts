@@ -2,15 +2,20 @@
  * @Description: 生成 Word 文档（.docx）
  *
  * 两个预设：
- *   gongwen —— 党政机关公文格式（GB/T 9704—2012）。这是默认值：
- *              页边距上 37 / 下 35 / 左 28 / 右 26 mm，正文三号仿宋_GB2312，
- *              固定行距 28.8 磅（版心正好排 22 行），首行缩进 2 字符，
- *              标题二号小标宋居中，一级黑体 / 二级楷体_GB2312 / 三级仿宋加粗，
- *              页脚页码「— 1 —」。
+ *   gongwen —— 党政机关公文格式（默认值，参数见 GONGWEN 那张表）：
+ *              页边距上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm，
+ *              正文方正仿宋_GBK 三号，行距**固定值 29.7 磅**，首行缩进 2 字符，
+ *              标题方正小标宋_GBK 二号居中，页脚页码「— 1 —」。
  *   plain   —— 普通文档：1 英寸页边距、小四宋体、1.5 倍行距。给"不想要公文壳子"的场景。
  *
- * 为什么手写 OOXML 而不是用 docx 库：运行组件零依赖（详见 zip.ts 顶部的说明）。
- * OOXML 只要 part 齐全、XML 合法、rels 对得上，Word / WPS / LibreOffice 都能打开。
+ * ★ 公文正文的"层次"不是靠 Markdown 的 # 层级，而是靠**行首的序数**：
+ *     一、        → 第一层，方正黑体_GBK
+ *     （一）      → 第二层，方正楷体_GBK
+ *     1.          → 第三层，方正仿宋_GBK（与正文同字体）
+ *     （1）       → 第四层，方正仿宋_GBK
+ *   序数**可以越级**（一、之后直接上（1）），所以只按行首前缀判断，不做顺序追踪。
+ *   模型爱把这些写成普通段落（甚至和正文挤在同一个 Markdown 段落里），
+ *   所以检测放在"块 → 段落"的**每一行**上，见 ordinalLevel()。
  *
  * ★ 两个"看起来能跑、打开就露馅"的排版坑，都在这里被刻意规避：
  *   1. 手动换行符（Shift+Enter，↓）不能被两端对齐：模型很爱写"一句一行"的短句块，
@@ -54,9 +59,9 @@ export interface DocxOptions {
   /** 文档大标题（居中，二号小标宋） */
   title?: string
   preset?: DocxPreset | string
-  /** 标题字体，默认随预设（公文=方正小标宋简体） */
+  /** 标题字体，默认随预设（公文=方正小标宋_GBK） */
   titleFont?: string
-  /** 正文字体，默认随预设（公文=仿宋_GB2312） */
+  /** 正文字体，默认随预设（公文=方正仿宋_GBK） */
   bodyFont?: string
   /** 标题下方的信息行（导出时间、来源等），每项一行 */
   meta?: string[]
@@ -79,12 +84,14 @@ interface Layout {
   /** 正文。size 单位是半磅 */
   body: { font: string; size: number; firstLineChars: number }
   title: { font: string; size: number }
-  /** 标题层级用的字体：公文的一级黑体、二级楷体、三级仿宋加粗 */
+  /** 层次序数用的字体：公文的一级黑体、二级楷体、三/四级仿宋（与正文同） */
   h1: { font: string; size: number; bold: boolean }
   h2: { font: string; size: number; bold: boolean }
   h3: { font: string; size: number; bold: boolean }
   /** 表格字号（五号，比正文小一档才放得下） */
   table: { size: number }
+  /** 表头字体（公文里沿用第一层的黑体，与正文的方正字族保持一致） */
+  tableHead: string
   /** 代码字号 */
   code: { size: number }
   latin: string
@@ -95,16 +102,19 @@ interface Layout {
 const GONGWEN: Layout = {
   // A4：210 × 297 mm
   page: { w: mm(210), h: mm(297) },
-  // GB/T 9704—2012：上 37、下 35、左 28、右 26 mm，版心 156 × 225 mm
-  margin: { top: mm(37), right: mm(26), bottom: mm(35), left: mm(28), header: mm(15), footer: mm(17.5) },
-  // 版心高 225mm ≈ 637.8pt，排 22 行 → 每行 28.99pt，取 28.8pt（= 576 二十分之一磅）
-  line: 576,
-  body: { font: '仿宋_GB2312', size: FONT_SIZE.sanhao, firstLineChars: 200 },
-  title: { font: '方正小标宋简体', size: FONT_SIZE.erhao },
-  h1: { font: '黑体', size: FONT_SIZE.sanhao, bold: false },
-  h2: { font: '楷体_GB2312', size: FONT_SIZE.sanhao, bold: false },
-  h3: { font: '仿宋_GB2312', size: FONT_SIZE.sanhao, bold: true },
+  // 页面设置：上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm → 版心 159 × 233 mm
+  margin: { top: mm(35), right: mm(25.5), bottom: mm(29), left: mm(25.5), header: mm(15), footer: mm(17.5) },
+  // 正文格式：行距**固定值 29.7 磅** = 594 二十分之一磅
+  // （版心高 233mm ≈ 660.5pt，660.5 / 29.7 ≈ 22.2 → 一页正好排 22 行）
+  line: 594,
+  body: { font: '方正仿宋_GBK', size: FONT_SIZE.sanhao, firstLineChars: 200 },
+  title: { font: '方正小标宋_GBK', size: FONT_SIZE.erhao },
+  // 层次序数对应的字体：一、（黑体）→（一）（楷体）→ 1. /（1）（仿宋，与正文同）
+  h1: { font: '方正黑体_GBK', size: FONT_SIZE.sanhao, bold: false },
+  h2: { font: '方正楷体_GBK', size: FONT_SIZE.sanhao, bold: false },
+  h3: { font: '方正仿宋_GBK', size: FONT_SIZE.sanhao, bold: false },
   table: { size: FONT_SIZE.wuhao },
+  tableHead: '方正黑体_GBK',
   code: { size: FONT_SIZE.wuhao },
   latin: 'Times New Roman',
   mono: 'Consolas',
@@ -121,11 +131,50 @@ const PLAIN: Layout = {
   h2: { font: '宋体', size: FONT_SIZE.sanhao, bold: true },
   h3: { font: '宋体', size: FONT_SIZE.xiaosi, bold: true },
   table: { size: FONT_SIZE.xiaosi },
+  tableHead: '黑体',
   code: { size: FONT_SIZE.xiaosi },
   latin: 'Arial',
   mono: 'Consolas',
   pageNumberSize: FONT_SIZE.xiaosi
 }
+
+/* ==================================================================== *
+ * 层次序数 → 字体
+ * ==================================================================== */
+
+/** 层次序数里用的中文数字（含"两""〇"这类常见写法） */
+const CN_NUM = '一二三四五六七八九十百零〇两'
+
+/**
+ * 层次序数前缀。顺序即优先级：带括号的先判，否则「（1）」会被当成裸数字那一档。
+ *   （1）→ 4   （一）→ 2   1. → 3   一、→ 1
+ * 序数后面跟数字的写法要排掉（「3.5 万元」是钱数不是第三层）：
+ * 点号形式加 (?!\d)，顿号/括号形式本身就不会和数字连用。
+ */
+const ORDINAL_RULES: Array<{ re: RegExp; level: number }> = [
+  { re: /^[（(]\d{1,3}[）)]/, level: 4 },
+  { re: new RegExp(`^[（(][${CN_NUM}]{1,4}[）)]`), level: 2 },
+  { re: /^\d{1,3}(?:[、)）]|[.．](?!\d))/, level: 3 },
+  { re: new RegExp(`^[${CN_NUM}]{1,4}(?:、|[.．](?!\\d))`), level: 1 }
+]
+
+/**
+ * 判断一行文字属于哪一层次（1~4），没有序数返回 0。
+ *
+ * 判断前把空白与 **加粗** 这类行内标记清掉，否则 `**一、总体要求**`
+ * 会因为行首多出两个星号而漏检。序数可以越级使用，所以只看本行前缀，不记状态。
+ */
+export const ordinalLevel = (text: string): number => {
+  const s = String(text == null ? '' : text).replace(/[*_`~\s]/g, '')
+  for (let i = 0; i < ORDINAL_RULES.length; i++) {
+    if (ORDINAL_RULES[i].re.test(s)) return ORDINAL_RULES[i].level
+  }
+  return 0
+}
+
+/** 层次 → 字体。第三、四层同为仿宋（与正文同字体，靠序数本身区分层次） */
+const levelStyle = (layout: Layout, level: number): { font: string; bold: boolean } =>
+  level <= 1 ? layout.h1 : level === 2 ? layout.h2 : layout.h3
 
 /* ==================================================================== *
  * XML 片段生成
@@ -349,7 +398,7 @@ function tableXml(block: Extract<MdBlock, { type: 'table' }>, layout: Layout): s
 
   const cellXml = (text: string, width: number, isHead: boolean, align: string): string => {
     const headStyle: RunStyle = isHead
-      ? { eastAsia: '黑体', latin: layout.latin, size: layout.table.size, bold: false }
+      ? { eastAsia: layout.tableHead, latin: layout.latin, size: layout.table.size, bold: false }
       : cellStyle
     const runs = parseInlineRuns(text)
     // 空单元格也要有一个空段落，否则 <w:tc> 里没有 <w:p> 是非法结构
@@ -437,13 +486,7 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
    * 正文段落。**一行一段**：文本里若带手动换行符，先按回车拆成多段再逐段铺出去
    * （见 splitLines 的说明），所以每段都恰好是一行，两端对齐不会拉伸任何一行。
    */
-  const textPara = (text: string, override?: Partial<RunStyle>, extra?: ParaOpts) => {
-    const st: RunStyle = {
-      eastAsia: override && override.eastAsia ? override.eastAsia : body.eastAsia,
-      latin: body.latin,
-      size: override && override.size ? override.size : body.size,
-      bold: override && override.bold
-    }
+  const textPara = (line: string, st: RunStyle, extra?: ParaOpts) => {
     const o: ParaOpts = { ind: { firstLineChars: layout.body.firstLineChars }, line: layout.line, jc: 'both', rPr: st }
     if (extra) {
       if (extra.ind) o.ind = extra.ind
@@ -453,13 +496,29 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
       if (extra.afterLines) o.afterLines = extra.afterLines
       if (extra.bottomBorder) o.bottomBorder = extra.bottomBorder
     }
-    return paraXml(runsXml(parseInlineRuns(text), st, layout), o)
+    return paraXml(runsXml(parseInlineRuns(line), st, layout), o)
+  }
+
+  /**
+   * 这一行该用什么字体：公文预设下先看行首的层次序数（一、/（一）/1./（1）），
+   * 认出序数就按层次换字体，认不出才用调用方给的默认样式。
+   *
+   * 只认序数、不认 Markdown 的 # 层级 —— 模型经常把「一、」写成普通段落、
+   * 或者写成 `## 一、` 这种层级错位的形式，序数才是编排者真实表达的层次。
+   * 序数可以越级使用，所以逐行独立判断，不记状态。
+   */
+  const lineStyle = (line: string, def: RunStyle): RunStyle => {
+    if (preset !== 'gongwen') return def
+    const lv = ordinalLevel(line)
+    if (!lv) return def
+    const pick = levelStyle(layout, lv)
+    return { eastAsia: pick.font, latin: def.latin, size: def.size, bold: pick.bold }
   }
 
   /** 把一段可能带手动换行符的文本铺成多个段落（每个换行符 = 一个回车） */
-  const pushLines = (text: string, override?: Partial<RunStyle>, extra?: ParaOpts) => {
+  const pushLines = (text: string, def: RunStyle, extra?: ParaOpts) => {
     const lines = splitLines(text)
-    for (let k = 0; k < lines.length; k++) out.push(textPara(lines[k], override, extra))
+    for (let k = 0; k < lines.length; k++) out.push(textPara(lines[k], lineStyle(lines[k], def), extra))
   }
 
   for (let i = 0; i < blocks.length; i++) {
@@ -467,14 +526,19 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
 
     if (b.type === 'heading') {
       // 公文没有 Markdown 那种"层级字号递增"，而是同一字号换字体：
-      //   一级黑体 / 二级楷体 / 三级及以下仿宋加粗
+      //   一级黑体 / 二级楷体 / 三级及以下仿宋
+      // 这里给的是"按 # 层级"的兜底，行首带序数时由 lineStyle 覆盖成序数对应的那档。
       const pick = b.level <= 1 ? layout.h1 : b.level === 2 ? layout.h2 : layout.h3
-      pushLines(b.text, { eastAsia: pick.font, bold: pick.bold }, { beforeLines: preset === 'gongwen' ? 0 : 25 })
+      pushLines(
+        b.text,
+        { eastAsia: pick.font, latin: layout.latin, size: layout.body.size, bold: pick.bold },
+        { beforeLines: preset === 'gongwen' ? 0 : 25 }
+      )
       continue
     }
 
     if (b.type === 'para') {
-      pushLines(b.text)
+      pushLines(b.text, body)
       continue
     }
 
@@ -484,12 +548,14 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
       const left = 200 + b.level * 200
       const marker = b.ordered ? `${b.index}. ` : '· '
       const lines = splitLines(b.text)
+      // 续行与首行同字体：续行是这一条的内容，不该因为它没有序数就换回正文字体
+      const st = lineStyle(lines[0], body)
       out.push(
-        paraXml(runsXml(parseInlineRuns(marker + lines[0]), body, layout), {
+        paraXml(runsXml(parseInlineRuns(marker + lines[0]), st, layout), {
           ind: { leftChars: left, hangingChars: 100 },
           line: layout.line,
           jc: 'both',
-          rPr: body
+          rPr: st
         })
       )
       /* 续行：手动换行符已经换成了回车，所以它是一条**独立段落**。
@@ -497,11 +563,11 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
          看着仍然像"同一条目折了行"，但不会再被两端对齐拉伸。 */
       for (let k = 1; k < lines.length; k++) {
         out.push(
-          paraXml(runsXml(parseInlineRuns(lines[k]), body, layout), {
+          paraXml(runsXml(parseInlineRuns(lines[k]), st, layout), {
             ind: { leftChars: left, firstLineChars: 0 },
             line: layout.line,
             jc: 'both',
-            rPr: body
+            rPr: st
           })
         )
       }
@@ -509,8 +575,13 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
     }
 
     if (b.type === 'quote') {
-      // 引用：楷体 + 左右各缩进 2 字符；同样逐行独立成段
-      const st: RunStyle = { eastAsia: '楷体_GB2312', latin: layout.latin, size: body.size }
+      // 引用：楷体（公文里第二层的字体；普通文档预设退回系统楷体）+ 左右各缩进 2 字符；
+      // 同样逐行独立成段
+      const st: RunStyle = {
+        eastAsia: preset === 'gongwen' ? layout.h2.font : '楷体',
+        latin: layout.latin,
+        size: body.size
+      }
       const lines = splitLines(b.text)
       for (let k = 0; k < lines.length; k++) {
         out.push(

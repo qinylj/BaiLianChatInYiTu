@@ -37,10 +37,12 @@
 - **导出也按渲染后的样子出**：默认 `.html` 单文件（能直接打开，也能直接粘进 Word），
   可选 `.txt`（去语法符号，带 BOM，Windows 记事本不乱码）或 `.md`（源码留档）
 - **单条回答可一键导出 Word / TXT / Markdown 原文**（按钮在「重答」旁边）：
-  - **Word 默认按党政机关公文格式排版**（GB/T 9704—2012）：页边距上 37 / 下 35 / 左 28 / 右 26 mm，
-    正文三号仿宋_GB2312，固定行距 28.8 磅（版心正好排 22 行），首行缩进 2 字符，
-    标题二号小标宋居中，页脚「— 1 —」页码；标题层级按公文的"一级黑体 / 二级楷体_GB2312 /
-    三级仿宋加粗"映射；Markdown 表格落成 **Word 真表格**（表头跨页自动重复、列宽按内容分配、
+  - **Word 默认按党政机关公文格式排版**：页边距上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm，
+    正文方正仿宋_GBK 三号，**行距固定值 29.7 磅**（版心 159 × 233 mm，一页正好排 22 行），
+    首行缩进 2 字符，标题方正小标宋_GBK 二号居中，页脚「— 1 —」页码；
+    正文的**层次按行首序数**自动换字体 ——「一、」方正黑体_GBK、「（一）」方正楷体_GBK、
+    「1.」与「（1）」方正仿宋_GBK（与正文同），序数可以越级使用；
+    Markdown 表格落成 **Word 真表格**（表头跨页自动重复、列宽按内容分配、
     总宽正好铺满版心，不会因为某列内容长就把版心撑歪）。也可切换成「普通文档」预设
   - **TXT 就是渲染后的纯文本**（带 BOM + CRLF）：不做结构转换，永远不丢内容，是"先存下来再说"的出口
   - **MD 是渲染前的原数据**：与模型返回的 Markdown **逐字节相同**（不转结构、不改换行、不加 BOM），
@@ -52,6 +54,9 @@
     字距被拉开的排版事故（Word 的两端对齐只放过每段最后一行，手动换行符只结束"行"不结束"段落"）。
     代码块例外：它的换行是内容本身的结构，仍留在同一段落里
   - 排版细节二：Markdown 分割线 `---` 直接丢弃，不在公文里凭空画一条横线
+  - 排版细节三：模型用空格摆版式留下的**多余空格会被清掉**（`总指挥：   企业主要负责人`、
+    `第一章　　总则`），但中英文之间、数字前后的空格是正常写法（`依据 GB/T 9704 标准`、`共 30 人`），
+    行内代码里的空格更是内容 —— 一律不动。**MD 导出是唯一例外**，那里给的是渲染前的原数据，一个字符都不改
 - 输入区支持附件入口（聚焦时出现）、Enter 发送 / Shift+Enter 换行
 
 **左侧栏**
@@ -108,12 +113,11 @@ BaiLianChatInYiTu/
 ├── tools/
 │   ├── bump-version.cjs        # 版本号命令行：查看 / 自增 / 指定
 │   ├── pack.cjs                # 把 dist 打成带版本的交付 zip（零依赖 zip 写入）
-│   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"（75 项，无需浏览器）
+│   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"+ 空格清理（86 项，无需浏览器）
 │   ├── verify-copy-clipboard.cjs  # 真浏览器自检：剪贴板里到底是渲染后内容还是 Markdown 原文
-│   ├── verify-office-export.cjs   # 导出自检（86 项：行内解析交叉一致性 / 排版回归 / zip / 编排）
-│   ├── verify_ooxml.py            # Python 标准库独立复验产物（88 项：zipfile 验 CRC、ElementTree 验 XML）
-│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（35 项）
-│   └── verify_ooxml.py         # 用 Python 标准库交叉验证产物（zipfile 验 CRC、ElementTree 验 XML）
+│   ├── verify-office-export.cjs   # 导出自检（106 项：行内交叉一致性 / 排版回归 / 层次序数 / zip / 编排）
+│   ├── verify_ooxml.py            # Python 标准库独立复验产物（105 项：zipfile 验 CRC、ElementTree 验 XML）
+│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（42 项）
 └── src/
     ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（16 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
@@ -121,11 +125,11 @@ BaiLianChatInYiTu/
     │   ├── config.vue          # 设置面板（naive-ui，分组折叠）
     │   ├── index.vue           # 运行组件（对话界面，零 UI 库依赖）
     │   ├── api.ts              # 两种协议的请求、SSE 解析、<think> 标签拆分
-    │   ├── markdown.ts         # 自研 Markdown 解析（零依赖）：HTML / 纯文本 / 结构化块三种出口
+    │   ├── markdown.ts         # 自研 Markdown 解析（零依赖）：HTML / 纯文本 / 结构化块三种出口 + 空格清理
     │   ├── clipboard.ts        # 复制：富文本 + 纯文本双形态，非安全上下文有兜底
     │   ├── zip.ts              # 零依赖 ZIP 写入器（.docx 就是 zip 包，只用 stored 模式）
     │   ├── ooxml.ts            # OOXML 公共工具：XML 转义与非法字符清理、mm/pt/字号换算、part 拼装
-    │   ├── docx.ts             # Word 生成：公文版式常量、Markdown 块 → 段落/表格
+    │   ├── docx.ts             # Word 生成：公文版式常量、层次序数 → 字体、Markdown 块 → 段落/表格
     │   ├── download.ts         # 存盘：Blob + <a download>（非安全上下文也能用）
     │   ├── exporter.ts         # 导出内容构造：html / txt / md / docx（含文档标题取名规则）
     │   ├── presets.ts          # 主题 / 背景 / 默认智能体 / 默认模型 / 默认网关
@@ -204,9 +208,9 @@ npm run pack         # 已编译过，只想重新打 zip
 把 TS 现场转成可执行代码），也不需要 webpack dev server：
 
 ```bash
-node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本"，75 项，纯 Node
-node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / TXT / MD，86 项 + Python 交叉验证 88 项
-node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，35 项
+node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本" + 空格清理，86 项，纯 Node
+node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / 层次序数 / TXT / MD，106 项 + Python 交叉验证 105 项
+node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，42 项
 node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 9 项 / CHROME_UI=1 共 20 项）
 ```
 
@@ -226,9 +230,10 @@ node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 
 - 直连大模型时没有百炼那套会话管理（createSession/deleteSession），历史只在本地。
 - 最大 Token 面板上限开到 1048576，但各家模型有自己的上限
   （如 DeepSeek-R1 官方 64K），实际按模型规格填。
-- **导出公文时的字体依赖本机安装**：标题用的「方正小标宋简体」、正文用的「仿宋_GB2312」
-  都是公文字体的标准叫法，但**不是 Windows 自带字体**。没装的话 Word 会自动回退成默认字体，
-  文档打开是正常的，只是标题不是小标宋。面板里可以把标题字体改成「黑体」这类随系统自带的字体。
+- **导出公文时的字体依赖本机安装**：标题用的「方正小标宋_GBK」、正文用的「方正仿宋_GBK」、
+  层次用的「方正黑体_GBK / 方正楷体_GBK」（方正 GBK 系列）都是公文字体的标准叫法，
+  但**不是 Windows 自带字体**。没装的话 Word 会自动回退成默认字体，文档打开是正常的，
+  只是字体不是小标宋 / 仿宋。面板里可以把标题字体改成「黑体」这类随系统自带的字体。
 - 导出的 `.docx` 内部的 zip **不压缩**（stored），文件偏大（公文量级几十到几百 KB）。
   这是为了避开 `CompressionStream` 的异步链路，换取导出全程同步、任何浏览器都能跑。
 - 单条回答导出的 Word / TXT / MD **共用同一套标题取名规则**（正文首个标题 > 首段前 24 字 >

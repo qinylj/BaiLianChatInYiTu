@@ -32,7 +32,7 @@ export interface OfficeOptions {
   title?: string
   /** 'gongwen' 标准公文格式 | 'plain' 普通文档 */
   preset?: string
-  /** 标题字体，留空用预设的（公文默认「方正小标宋简体」） */
+  /** 标题字体，留空用预设的（公文默认「方正小标宋_GBK」） */
   titleFont?: string
   /** 正文字体覆盖 */
   bodyFont?: string
@@ -210,7 +210,7 @@ export function buildOfficeExport(text: string, o?: OfficeOptions): ExportResult
 
   /* 标题来源：调用方指定 > 正文首个标题 > 首段前若干字。
      从正文里取标题时要**把它从 blocks 里摘掉**，否则 Word 里同一句话
-     会先以二号小标宋居中显示一次、下面又以黑体显示一次，看着像出错。 */
+     会先以二号小标宋居中显示一次、下面又以层次字体显示一次，看着像出错。 */
   let title = opt.title || ''
   if (!title) {
     for (let i = 0; i < blocks.length; i++) {

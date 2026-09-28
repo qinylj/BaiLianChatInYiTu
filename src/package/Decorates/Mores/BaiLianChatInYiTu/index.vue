@@ -1619,7 +1619,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.5'
+  version: '1.0.6'
 }
 </script>
 

@@ -123,8 +123,10 @@ def check_zip_hygiene(parts, label):
 # ==================================================================== #
 
 def check_docx_gongwen(path):
-    """标准公文格式（GB/T 9704—2012）的关键版式参数逐条核对"""
-    section('【A】docx —— 标准公文格式（GB/T 9704—2012）')
+    """公文格式的关键版式参数逐条核对：
+       页边距上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm，行距固定值 29.7 磅，
+       标题方正小标宋_GBK、正文方正仿宋_GBK 三号、层次序数换字体"""
+    section('【A】docx —— 公文格式（页面设置 / 行距 / 字体 / 层次序数）')
     parts = load(path)
     if not parts:
         return
@@ -153,16 +155,16 @@ def check_docx_gongwen(path):
            pgsz.attrib if pgsz is not None else None)
 
         mar = sect.find(W + 'pgMar')
-        # 上37 / 下35 / 左28 / 右26 mm → twips
-        want = {'top': '2098', 'bottom': '1984', 'left': '1587', 'right': '1474'}
+        # 上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm → twips（与 ooxml.mm 同一套 round 换算）
+        want = {'top': '1984', 'bottom': '1644', 'left': '1446', 'right': '1446'}
         got = {}
         for k in want:
             got[k] = mar.get(W + k) if mar is not None else None
-        ck('页边距 上37/下35/左28/右26 mm（2098/1984/1587/1474 twips）', got == want, got)
+        ck('页边距 上3.5/下2.9/左2.55/右2.55 cm（1984/1644/1446/1446 twips）', got == want, got)
 
         grid = sect.find(W + 'docGrid')
-        ck('文档网格按 28.8 磅行距（linePitch=576）',
-           grid is not None and grid.get(W + 'linePitch') == '576',
+        ck('文档网格按固定行距 29.7 磅（linePitch=594）',
+           grid is not None and grid.get(W + 'linePitch') == '594',
            grid.attrib if grid is not None else None)
 
         fref = sect.find(W + 'footerReference')
@@ -190,18 +192,18 @@ def check_docx_gongwen(path):
         ppr = p.find(W + 'pPr')
         if ppr is not None:
             sp = ppr.find(W + 'spacing')
-            if sp is not None and sp.get(W + 'line') == '576' and sp.get(W + 'lineRule') == 'exact':
+            if sp is not None and sp.get(W + 'line') == '594' and sp.get(W + 'lineRule') == 'exact':
                 exact_line += 1
             ind = ppr.find(W + 'ind')
             if ind is not None and ind.get(W + 'firstLineChars') == '200':
                 first_line_indent += 1
         ea, sz = run_font(p)
-        if ea == '仿宋_GB2312' and sz == '32':
+        if ea == '方正仿宋_GBK' and sz == '32':
             body_font += 1
 
-    ck('有段落使用固定行距 28.8 磅（line=576 exact）', exact_line > 0, exact_line)
+    ck('有段落使用固定行距 29.7 磅（line=594 exact）', exact_line > 0, exact_line)
     ck('有段落首行缩进 2 字符（firstLineChars=200）', first_line_indent > 0, first_line_indent)
-    ck('正文 run 用三号仿宋_GB2312（sz=32 半磅）', body_font > 0, body_font)
+    ck('正文 run 用方正仿宋_GBK 三号（sz=32 半磅）', body_font > 0, body_font)
 
     # 标题：居中 + 二号小标宋
     title_ok = False
@@ -211,12 +213,12 @@ def check_docx_gongwen(path):
             continue
         jc = ppr.find(W + 'jc')
         ea, sz = run_font(p)
-        if jc is not None and jc.get(W + 'val') == 'center' and ea == '方正小标宋简体' and sz == '44':
+        if jc is not None and jc.get(W + 'val') == 'center' and ea == '方正小标宋_GBK' and sz == '44':
             title_ok = True
             break
-    ck('标题：二号小标宋（sz=44）居中', title_ok)
+    ck('标题：方正小标宋_GBK 二号（sz=44）居中', title_ok)
 
-    # 三级标题字体：黑体 / 楷体_GB2312 / 仿宋加粗
+    # 层次序数 → 字体：一、（黑体）/（一）（楷体）/ 1.（1）（仿宋，与正文同）
     fonts_used = set()
     for p in paras:
         for r in p.findall(W + 'r'):
@@ -226,8 +228,8 @@ def check_docx_gongwen(path):
             f = rp.find(W + 'rFonts')
             if f is not None and f.get(W + 'eastAsia'):
                 fonts_used.add(f.get(W + 'eastAsia'))
-    ck('一级标题用黑体', '黑体' in fonts_used, sorted(fonts_used))
-    ck('二级标题用楷体_GB2312', '楷体_GB2312' in fonts_used, sorted(fonts_used))
+    ck('第一层（一、）用方正黑体_GBK', '方正黑体_GBK' in fonts_used, sorted(fonts_used))
+    ck('第二层（（一））用方正楷体_GBK', '方正楷体_GBK' in fonts_used, sorted(fonts_used))
 
     # ---- 表格 ----
     tbls = body.findall(W + 'tbl')
@@ -466,6 +468,65 @@ def p(name):
     return os.path.normpath(os.path.join(BASE, name))
 
 
+def check_ordinal(path):
+    """层次序数换字体 + 多余空格清理（用 ElementTree 独立复算一遍）"""
+    section('【G】docx —— 层次序数换字体 / 多余空格清理')
+    parts = load(path)
+    if not parts:
+        return
+    check_zip_hygiene(parts, 'docx-ordinal')
+    doc = parse(parts, 'word/document.xml')
+    if doc is None:
+        return
+    body = doc.find(W + 'body')
+    paras = body.findall(W + 'p') if body is not None else []
+    ck('有正文段落', len(paras) >= 8, len(paras))
+
+    def para_font(p):
+        r = p.find(W + 'r')
+        rp = r.find(W + 'rPr') if r is not None else None
+        f = rp.find(W + 'rFonts') if rp is not None else None
+        return f.get(W + 'eastAsia') if f is not None else None
+
+    fonts = {}
+    for p in paras:
+        fonts.setdefault(all_text(p, W + 't'), para_font(p))
+
+    # 四种序数各对应一档字体（序数可以越级，互不影响）
+    for text, want in [('一、总体要求', '方正黑体_GBK'),
+                       ('（一）指导思想', '方正楷体_GBK'),
+                       ('1.工作原则', '方正仿宋_GBK'),
+                       ('（1）坚持预防为主', '方正仿宋_GBK')]:
+        ck('层次序数 %r → %s' % (text, want), fonts.get(text) == want, fonts.get(text))
+
+    ck('没有序数的正文行仍是方正仿宋_GBK',
+       fonts.get('总指挥：企业主要负责人') == '方正仿宋_GBK',
+       fonts.get('总指挥：企业主要负责人'))
+
+    # 多余空格：用空格摆版式的短句被合并
+    ck('用空格对齐的短句被合并（总指挥：   企业主要负责人 → 无空格）',
+       '总指挥：企业主要负责人' in fonts, [t for t in fonts if '总指挥' in t])
+    ck('「成员：  生产、安全…」里的多余空格被清掉',
+       '成员：生产、安全、环保等部门负责人' in fonts, [t for t in fonts if '成员' in t])
+    ck('全角空格与首尾空白都被清掉（「  第一章　　总则   」→「第一章总则」）',
+       '第一章总则' in fonts, [t for t in fonts if '第一章' in t])
+
+    # 反向：不该动的空格一个都没动
+    ck('中英文之间 / 数字前后的空格保留（依据 GB/T 9704 标准编制，共 30 人参与。）',
+       '依据 GB/T 9704 标准编制，共 30 人参与。' in fonts,
+       [t for t in fonts if 'GB' in t])
+    ck('行内代码里的空格原样保留（a  b  c）',
+       '代码里的空格不能动：a  b  c' in fonts, [t for t in fonts if '代码里' in t])
+
+    dirty = [t for t in fonts if 'a  b  c' not in t and ('  ' in t or '\u3000' in t)]
+    ck('全篇再没有连续空格 / 全角空格（代码段除外）', not dirty, dirty)
+
+    used = set(f for f in fonts.values() if f)
+    ck('字体只用了公文允许的四种（标题小标宋 + 三档层次）',
+       used <= {'方正小标宋_GBK', '方正黑体_GBK', '方正楷体_GBK', '方正仿宋_GBK'},
+       sorted(used))
+
+
 def main():
     print('=' * 68)
     print('导出产物校验（Python 标准库独立实现：zipfile 验 CRC，ElementTree 验 XML）')
@@ -476,6 +537,7 @@ def main():
     check_docx_empty(p('case-empty.docx'))
     check_docx_dirty(p('case-dirty.docx'))
     check_layout_regressions(p('case-gongwen.docx'), p('case-softbreak.docx'))
+    check_ordinal(p('case-ordinal.docx'))
     check_txt(p('case-content.txt'))
     check_md(p('case-content.md'))
 

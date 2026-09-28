@@ -43,10 +43,65 @@ const gatewayHeaders = (cfg: GatewayOption) => ({
   'Content-Type': 'application/json'
 })
 
+/**
+ * 浏览器只在「请求根本没发出去」或「响应读不到」时才抛 TypeError: Failed to fetch，
+ * 它把跨域预检被拒、混合内容、网络不可达三种完全不同的原因糊成同一句话，运维只能靠猜。
+ * 这里补上判定与处置建议，把定位时间从小时级压到分钟级。
+ * 注意：Postman / apifox / curl 不做跨域校验，它们能通不代表浏览器能通。
+ */
+function explainFetchError(url: string, err: any): any {
+  const raw = (err && err.message) || String(err)
+  const name = (err && err.name) || ''
+  // 主动取消 / 超时：原样抛出，上层按「已中断」处理
+  if (name === 'AbortError' || /abort/i.test(raw)) return err
+  if (!/failed to fetch|networkerror|load failed|network request failed/i.test(raw)) return err
+
+  const tips: string[] = []
+  let pageOrigin = ''
+  try {
+    pageOrigin = typeof location !== 'undefined' ? location.origin : ''
+  } catch (e) {
+    /* 非浏览器环境 */
+  }
+
+  if (/^https?:\/\//i.test(url)) {
+    let targetOrigin = url
+    try {
+      targetOrigin = new URL(url).origin
+    } catch (e) {
+      /* 地址不合法则保持原样 */
+    }
+    if (pageOrigin.indexOf('https:') === 0 && url.indexOf('http://') === 0) {
+      tips.push('页面是 https 而接口是 http（混合内容被浏览器拦截），请把接口换成 https 或走同源反向代理')
+    } else if (pageOrigin && targetOrigin !== pageOrigin) {
+      tips.push(
+        `接口 ${targetOrigin} 与页面 ${pageOrigin} 不同源，浏览器必须先发 CORS 预检（OPTIONS），` +
+          `网关未放行预检就会在这里中断；请让网关 CORS 放行来源 ${pageOrigin}` +
+          `（允许 POST/OPTIONS，允许 Authorization、Content-Type 请求头），` +
+          `或给大屏站点加同源反向代理、把网关地址填成相对路径`
+      )
+    }
+  }
+  tips.push('提示：Postman / apifox / curl 不校验跨域，它们能通不代表浏览器能通')
+
+  const out: any = new Error(`${raw}｜${tips.join('。')}`)
+  out.name = name || 'TypeError'
+  return out
+}
+
+/** 包装 fetch：只把网络层异常换成带处置建议的错误，其余行为完全不变 */
+async function request(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch (err) {
+    throw explainFetchError(url, err)
+  }
+}
+
 async function postJson(url: string, headers: Record<string, string>, body: any, timeoutMs: number, outer?: AbortSignal) {
   const { signal, dispose } = makeAbort(timeoutMs, outer)
   try {
-    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal })
+    const res = await request(url, { method: 'POST', headers, body: JSON.stringify(body), signal })
     const text = await res.text()
     let data: any = null
     try {
@@ -251,7 +306,7 @@ export async function runAgent(
   }
 
   try {
-    const res = await fetch(url, {
+    const res = await request(url, {
       method: 'POST',
       headers: gatewayHeaders(cfg),
       body: JSON.stringify(body),
@@ -447,7 +502,7 @@ export async function runModel(
 
   const { signal, dispose } = makeAbort(cfg.timeoutMs, outer)
   try {
-    const res = await fetch(cfg.baseUrl, {
+    const res = await request(cfg.baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

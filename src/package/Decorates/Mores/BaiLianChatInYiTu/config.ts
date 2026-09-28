@@ -56,8 +56,10 @@ export const option = {
   exportFormat: 'html',
   /** 消息级导出按钮：显示在每条回答脚注的「重答」旁边，导出单条内容 */
   showMsgExport: true,
-  exportWordText: '导出 Word',
-  exportTxtText: '导出 TXT',
+  exportWordText: '导出 Word（公文格式）',
+  exportTxtText: '导出 TXT（渲染后的纯文本）',
+  /** 导出的是渲染**前**的 Markdown 源码，一个字符都不改，留给二次加工 / diff */
+  exportMdText: '导出 Markdown 原文（渲染前）',
   /**
    * Word 排版预设：
    *   gongwen —— 党政机关公文格式（GB/T 9704—2012）：上37下35左28右26mm、

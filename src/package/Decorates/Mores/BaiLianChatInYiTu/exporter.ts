@@ -263,6 +263,26 @@ export function buildMessageText(markdown: string, o?: { title?: string; when?: 
 }
 
 /**
+ * 单条回答导出成 Markdown **原文**（.md）。
+ *
+ * 与上面两条链路都不同：这里**一个字符都不改** —— 文件内容与模型返回的 Markdown
+ * 源码逐字节一致（不转结构、不改换行、不加 BOM）。用途是留档和二次加工：
+ * 想自己重排版、喂给别的工具、或者对两份回答做 diff 时，只有原文才是可信的。
+ *
+ * 换行保持原样是刻意的：加了 CRLF 或 BOM 就不再是"原数据"了，
+ * diff 工具、Markdown 编辑器都能正确处理 UTF-8 + LF，不需要照顾。
+ */
+export function buildMessageMarkdown(markdown: string, o?: { title?: string; when?: Date }): ExportResult {
+  const opt: { title?: string; when?: Date } = o || {}
+  const d = opt.when || new Date()
+  return {
+    fileName: `${safeFileName(opt.title || pickDocTitle(markdown))}_${fileStamp(d)}.md`,
+    content: String(markdown == null ? '' : markdown),
+    mime: 'text/markdown;charset=utf-8'
+  }
+}
+
+/**
  * 生成导出文件内容。
  * @param conv      当前会话
  * @param format    导出格式（来自 option.exportFormat）

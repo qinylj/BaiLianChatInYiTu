@@ -36,18 +36,22 @@
   （大屏跑在 http 下没有 Clipboard API，走的是"选中隐藏容器 + execCommand"，实测两种形态都在）
 - **导出也按渲染后的样子出**：默认 `.html` 单文件（能直接打开，也能直接粘进 Word），
   可选 `.txt`（去语法符号，带 BOM，Windows 记事本不乱码）或 `.md`（源码留档）
-- **单条回答可一键导出 Word / TXT**（按钮在「重答」旁边）：
+- **单条回答可一键导出 Word / TXT / Markdown 原文**（按钮在「重答」旁边）：
   - **Word 默认按党政机关公文格式排版**（GB/T 9704—2012）：页边距上 37 / 下 35 / 左 28 / 右 26 mm，
     正文三号仿宋_GB2312，固定行距 28.8 磅（版心正好排 22 行），首行缩进 2 字符，
     标题二号小标宋居中，页脚「— 1 —」页码；标题层级按公文的"一级黑体 / 二级楷体_GB2312 /
     三级仿宋加粗"映射；Markdown 表格落成 **Word 真表格**（表头跨页自动重复、列宽按内容分配、
     总宽正好铺满版心，不会因为某列内容长就把版心撑歪）。也可切换成「普通文档」预设
   - **TXT 就是渲染后的纯文本**（带 BOM + CRLF）：不做结构转换，永远不丢内容，是"先存下来再说"的出口
-  - 两种格式都是**浏览器里现场生成**：Word 走零依赖手写 zip + OOXML（见 `zip.ts` / `docx.ts`），
+  - **MD 是渲染前的原数据**：与模型返回的 Markdown **逐字节相同**（不转结构、不改换行、不加 BOM），
+    留给二次加工 / diff / 喂给别的工具
+  - 三种格式都是**浏览器里现场生成**：Word 走零依赖手写 zip + OOXML（见 `zip.ts` / `docx.ts`），
     不走服务端、不引第三方 Office 库 —— 运行组件是要跟着大屏一起加载的
-  - 排版细节：Model 爱写的"一句一行"短句（Markdown 里属同一段落、Word 里是同段落内的软换行）
-    一律**左对齐**，不会被两端对齐逐行拉到版心宽；Markdown 分割线 `---` 直接丢弃，
-    不在公文里凭空画一条横线
+  - 排版细节一：模型爱写的"一句一行"短句（Markdown 里属同一段落、Word 里是**手动换行符** Shift+Enter）
+    会被换成**回车** —— 每行独立成段，于是段落仍可两端对齐，且不会出现「应　急　指　挥　部」这种
+    字距被拉开的排版事故（Word 的两端对齐只放过每段最后一行，手动换行符只结束"行"不结束"段落"）。
+    代码块例外：它的换行是内容本身的结构，仍留在同一段落里
+  - 排版细节二：Markdown 分割线 `---` 直接丢弃，不在公文里凭空画一条横线
 - 输入区支持附件入口（聚焦时出现）、Enter 发送 / Shift+Enter 换行
 
 **左侧栏**
@@ -104,10 +108,11 @@ BaiLianChatInYiTu/
 ├── tools/
 │   ├── bump-version.cjs        # 版本号命令行：查看 / 自增 / 指定
 │   ├── pack.cjs                # 把 dist 打成带版本的交付 zip（零依赖 zip 写入）
-│   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"（63 项，无需浏览器）
+│   ├── verify-export-text.cjs  # 静态自检：复制/导出用的"渲染后文本"（75 项，无需浏览器）
 │   ├── verify-copy-clipboard.cjs  # 真浏览器自检：剪贴板里到底是渲染后内容还是 Markdown 原文
-│   ├── verify-office-export.cjs   # Office 导出自检（51 项：行内解析交叉一致性 / zip 结构 / 编排）
-│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（21 项）
+│   ├── verify-office-export.cjs   # 导出自检（86 项：行内解析交叉一致性 / 排版回归 / zip / 编排）
+│   ├── verify_ooxml.py            # Python 标准库独立复验产物（88 项：zipfile 验 CRC、ElementTree 验 XML）
+│   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（35 项）
 │   └── verify_ooxml.py         # 用 Python 标准库交叉验证产物（zipfile 验 CRC、ElementTree 验 XML）
 └── src/
     ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（16 个文件）
@@ -199,9 +204,9 @@ npm run pack         # 已编译过，只想重新打 zip
 把 TS 现场转成可执行代码），也不需要 webpack dev server：
 
 ```bash
-node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本" + TXT 导出，75 项，纯 Node
-node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / TXT，67 项 + Python 交叉验证 81 项
-node tools/verify-office-download.cjs    # 真浏览器：点按钮 → 磁盘上出现文件，23 项
+node tools/verify-export-text.cjs        # 复制/导出用的"渲染后文本"，75 项，纯 Node
+node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / TXT / MD，86 项 + Python 交叉验证 88 项
+node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，35 项
 node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 9 项 / CHROME_UI=1 共 20 项）
 ```
 
@@ -226,8 +231,14 @@ node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 
   文档打开是正常的，只是标题不是小标宋。面板里可以把标题字体改成「黑体」这类随系统自带的字体。
 - 导出的 `.docx` 内部的 zip **不压缩**（stored），文件偏大（公文量级几十到几百 KB）。
   这是为了避开 `CompressionStream` 的异步链路，换取导出全程同步、任何浏览器都能跑。
-- 单条回答导出的 Word 与 TXT **共用同一套标题取名规则**（正文首个标题 > 首段前 24 字 >
-  「文档」），所以同一个回答导出的两个文件前缀是一样的。
+- 单条回答导出的 Word / TXT / MD **共用同一套标题取名规则**（正文首个标题 > 首段前 24 字 >
+  「文档」），所以同一个回答导出的三个文件前缀是一样的。
+- **改 Word 排版时请连带跑一遍自检**：`verify-office-export.cjs` 里有一条不变式 ——
+  「任何两端对齐（`w:jc=both`）的段落里都不许有 `<w:br/>`」。这不是洁癖：Word 的两端对齐
+  只放过**段落最后一行**，而手动换行符只结束"行"不结束"段落"，一旦带 `\n` 的文本被直接
+  丢进段落生成器，模型爱写的那句一行短句就会被拉成「应　　急　　指　　挥　　部」。
+  新增"文本里可能带 `\n`"的块类型时，必须走 `docx.ts` 的 `splitLines` 拆成独立段落
+  （代码块是唯一的例外：它的换行是内容本身的结构）。
 
 ---
 

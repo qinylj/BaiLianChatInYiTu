@@ -13,10 +13,15 @@
  * OOXML 只要 part 齐全、XML 合法、rels 对得上，Word / WPS / LibreOffice 都能打开。
  *
  * ★ 两个"看起来能跑、打开就露馅"的排版坑，都在这里被刻意规避：
- *   1. 两端对齐 + 软换行：模型很爱写"一句一行"的短句块，Markdown 里它们属于**同一个**
- *      段落（`para.text` 里的 \n），转成 Word 就是同一个 <w:p> 里的 <w:br/>。
- *      而 Word 的两端对齐只放过段落最后一行 —— 前面每一行都会被拉到版心宽度，
- *      排成「应　　急　　指　　挥　　部」。所以凡是有软换行的段落一律降级为左对齐。
+ *   1. 手动换行符（Shift+Enter，↓）不能被两端对齐：模型很爱写"一句一行"的短句块，
+ *      Markdown 里它们属于**同一个**段落（`para.text` 里的 \n）。若照直转成同一个
+ *      <w:p> 里的 <w:br/>，Word 的两端对齐会把每一行都拉到版心宽度，排成
+ *      「应　　急　　指　　挥　　部」—— 因为 both 只放过**段落最后一行**，
+ *      而手动换行符只结束"行"、不结束"段落"。
+ *      ★ 这里的选择是**把手动换行符换成回车**：每一行独立成段（splitLines），
+ *        于是每行都是"最后一行"，既不会被打散字距，也保住了公文要的两端对齐。
+ *      ★ 凡是新增"文本里可能带 \n"的块类型，都必须走 splitLines 拆段 ——
+ *        别指望 Word 去纠正；自检里有一条"含 <w:br/> 的段落不得是 both"兜着。
  *   2. 分割线：`---` 在 Markdown 里是分割线，在公文里什么都不是。直接丢弃，
  *      不要转成"带下边框的空段落"（那会得到一条孤零零的横线，还占一行高度）。
  *
@@ -152,8 +157,10 @@ const rPrXml = (s: RunStyle): string => {
 }
 
 /**
- * 一个 run。文本里的 \n 必须转成 <w:br/> ——
- * XML 文本节点里的裸换行会被 Word 当成空白吃掉，软换行就消失了。
+ * 一个 run。文本里残留的 \n 必须转成 <w:br/> ——
+ * XML 文本节点里的裸换行会被 Word 当成空白吃掉，换行就消失了。
+ * （正文里的 \n 已经在 splitLines 里换成了回车；走到这儿的只剩代码块与表格单元格的内容，
+ *   它们都不是两端对齐，用软换行不会出问题）
  */
 const runXml = (text: string, s: RunStyle): string => {
   const lines = String(text).split('\n')
@@ -262,13 +269,11 @@ const paraXml = (content: string, o?: ParaOpts): string => {
     if (ind.length) pPr += `<w:ind ${ind.join(' ')}/>`
   }
 
-  /* ★ 段内有软换行（<w:br/>）时不能用两端对齐。
-     Word 的"两端对齐（both）"只放过**段落最后一行**，而软换行只结束"行"不结束"段落"，
-     于是"应急指挥部"、"总指挥：企业主要负责人"这种独占一行的短句会被硬拉到版心宽度，
-     排成「应　　急　　指　　挥　　部」——这是最容易被当成排版事故的一种。
-     这类内容本来就是一句一行的短句集合（模型很爱这么写），左对齐才是它该有的样子。 */
-  const jc = p.jc === 'both' && content.indexOf('<w:br/>') >= 0 ? 'left' : p.jc
-  if (jc) pPr += `<w:jc w:val="${jc}"/>`
+  /* 这里**不**再为软换行降级对齐方式：手动换行符在上一层的 splitLines 里
+     就已经被换成了回车（每行独立成段），能走到这儿的 <w:br/> 只剩代码块和表格单元格，
+     两者都不是两端对齐。若日后有人放进"带 \n 又要求 both"的段落，Word 会重新
+     把短行拉成「应　　急　　指　　挥　　部」—— 自检里的那条断言就是用来抓这个的。 */
+  if (p.jc) pPr += `<w:jc w:val="${p.jc}"/>`
   if (p.rPr) pPr += rPrXml(p.rPr)
 
   return `<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${content}</w:p>`
@@ -399,6 +404,27 @@ function tableXml(block: Extract<MdBlock, { type: 'table' }>, layout: Layout): s
  * 块 → 段落
  * ==================================================================== */
 
+/**
+ * 拆行：把手动换行符换成**回车**。
+ *
+ * Word 里「回车（¶）」和「手动换行符（Shift+Enter，↓）」是两种东西：
+ *   ¶ 结束**段落**，↓ 只结束**行**。
+ * 而两端对齐只放过每段的**最后一行** —— 所以 ↓ 前面那些短行会被硬拉到版心宽度，
+ * 排成「应　　急　　指　　挥　　部」。模型写"一句一行"的短句块（`泄漏： / 小量： / 大量：`
+ * 这种）时用的就是 \n，在我们这儿等价于 ↓。
+ *
+ * 于是这里统一按 ¶ 处理 —— 每一行独立成段，每行都是各自段落的"最后一行"，
+ * 既不会被打散字距，又保住了公文要的两端对齐。
+ *
+ * 尾部的空行丢掉（段落末尾那个 \n 不该多造一个空段）；中间的空行保留成空段。
+ * 代码块例外：它的换行是代码本身的结构，必须留在同一个段落里（见 code 分支）。
+ */
+const splitLines = (text: string): string[] => {
+  const lines = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n')
+  while (lines.length > 1 && !lines[lines.length - 1].trim()) lines.pop()
+  return lines
+}
+
 function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'plain'): string {
   const body: RunStyle = {
     eastAsia: layout.body.font,
@@ -407,7 +433,10 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
   }
   const out: string[] = []
 
-  /** 正文段落：首行缩进 2 字符、两端对齐、固定行距 */
+  /**
+   * 正文段落。**一行一段**：文本里若带手动换行符，先按回车拆成多段再逐段铺出去
+   * （见 splitLines 的说明），所以每段都恰好是一行，两端对齐不会拉伸任何一行。
+   */
   const textPara = (text: string, override?: Partial<RunStyle>, extra?: ParaOpts) => {
     const st: RunStyle = {
       eastAsia: override && override.eastAsia ? override.eastAsia : body.eastAsia,
@@ -427,6 +456,12 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
     return paraXml(runsXml(parseInlineRuns(text), st, layout), o)
   }
 
+  /** 把一段可能带手动换行符的文本铺成多个段落（每个换行符 = 一个回车） */
+  const pushLines = (text: string, override?: Partial<RunStyle>, extra?: ParaOpts) => {
+    const lines = splitLines(text)
+    for (let k = 0; k < lines.length; k++) out.push(textPara(lines[k], override, extra))
+  }
+
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i]
 
@@ -434,14 +469,12 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
       // 公文没有 Markdown 那种"层级字号递增"，而是同一字号换字体：
       //   一级黑体 / 二级楷体 / 三级及以下仿宋加粗
       const pick = b.level <= 1 ? layout.h1 : b.level === 2 ? layout.h2 : layout.h3
-      out.push(
-        textPara(b.text, { eastAsia: pick.font, bold: pick.bold }, { beforeLines: preset === 'gongwen' ? 0 : 25 })
-      )
+      pushLines(b.text, { eastAsia: pick.font, bold: pick.bold }, { beforeLines: preset === 'gongwen' ? 0 : 25 })
       continue
     }
 
     if (b.type === 'para') {
-      out.push(textPara(b.text))
+      pushLines(b.text)
       continue
     }
 
@@ -450,35 +483,52 @@ function blocksToBody(blocks: MdBlock[], layout: Layout, preset: 'gongwen' | 'pl
       // 每级左缩进 2 字符，并让序号悬挂在文字外侧，长条目换行后与首行对齐
       const left = 200 + b.level * 200
       const marker = b.ordered ? `${b.index}. ` : '· '
-      const runs = parseInlineRuns(marker + b.text)
+      const lines = splitLines(b.text)
       out.push(
-        paraXml(runsXml(runs, body, layout), {
+        paraXml(runsXml(parseInlineRuns(marker + lines[0]), body, layout), {
           ind: { leftChars: left, hangingChars: 100 },
           line: layout.line,
           jc: 'both',
           rPr: body
         })
       )
+      /* 续行：手动换行符已经换成了回车，所以它是一条**独立段落**。
+         缩进给 leftChars=left（不悬挂）—— 这正是原文自动折行时文字该落的位置，
+         看着仍然像"同一条目折了行"，但不会再被两端对齐拉伸。 */
+      for (let k = 1; k < lines.length; k++) {
+        out.push(
+          paraXml(runsXml(parseInlineRuns(lines[k]), body, layout), {
+            ind: { leftChars: left, firstLineChars: 0 },
+            line: layout.line,
+            jc: 'both',
+            rPr: body
+          })
+        )
+      }
       continue
     }
 
     if (b.type === 'quote') {
-      // 引用：楷体 + 左右各缩进 2 字符
-      const runs = parseInlineRuns(b.text)
+      // 引用：楷体 + 左右各缩进 2 字符；同样逐行独立成段
       const st: RunStyle = { eastAsia: '楷体_GB2312', latin: layout.latin, size: body.size }
-      out.push(
-        paraXml(runsXml(runs, st, layout), {
-          ind: { leftChars: 200, rightChars: 200, firstLineChars: 0 },
-          line: layout.line,
-          jc: 'both',
-          rPr: st
-        })
-      )
+      const lines = splitLines(b.text)
+      for (let k = 0; k < lines.length; k++) {
+        out.push(
+          paraXml(runsXml(parseInlineRuns(lines[k]), st, layout), {
+            ind: { leftChars: 200, rightChars: 200, firstLineChars: 0 },
+            line: layout.line,
+            jc: 'both',
+            rPr: st
+          })
+        )
+      }
       continue
     }
 
     if (b.type === 'code') {
-      // 代码：等宽小一号，左缩进 2 字符，单倍行距（固定行距配小字号会很难看）
+      /* 代码：等宽小一号，左缩进 2 字符，单倍行距（固定行距配小字号会很难看）。
+         ★ 代码块**不拆**：它的换行是内容本身的结构（少一个 \n 代码就变了），
+           必须留在同一个段落里用 <w:br/>。它本来就是左对齐，也不存在拉伸问题。 */
       const runs: MdRun[] = [{ text: b.code, code: true }]
       const st: RunStyle = { eastAsia: '宋体', latin: layout.mono, size: layout.code.size }
       out.push(

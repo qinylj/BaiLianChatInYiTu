@@ -304,8 +304,9 @@
                         </svg>
                       </button>
                       <!-- 导出单条回答：Word（浏览器里现场生成，零依赖手写 zip + OOXML，
-                           默认按党政机关公文格式排版，见 docx.ts）/ 纯文本 .txt（见 exporter.ts）。
-                           TXT 不做结构转换，永远不丢内容，是"先存下来再说"的兜底出口。 -->
+                           默认按党政机关公文格式排版，见 docx.ts）/ 纯文本 .txt / Markdown 原文 .md。
+                           TXT 不做结构转换、MD 一个字符都不改（渲染前的原数据），
+                           两者都是"先存下来再说"的兜底出口，见 exporter.ts。 -->
                       <template v-if="o.showMsgExport && m.role === 'assistant' && !m.pending && m.content">
                         <button
                           class="ac-act"
@@ -355,6 +356,30 @@
                             <path d="M5.4 8.3h5.2" />
                             <path d="M5.4 10.5h5.2" />
                             <path d="M5.4 12.7h3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="ac-act"
+                          :class="{ active: exportedKey === m.id + '|md' }"
+                          :disabled="!!exportingId"
+                          :title="o.exportMdText"
+                          @click="exportMessage(m, 'md')"
+                        >
+                          <svg
+                            v-if="exportedKey === m.id + '|md'"
+                            class="ac-ico"
+                            viewBox="0 0 16 16"
+                            aria-hidden="true"
+                          >
+                            <path d="M3.4 8.5 6.4 11.5 12.7 5.2" />
+                          </svg>
+                          <!-- Markdown 原文：同一张纸 + 中间一个 M（与 Word 那个 W 呼应） -->
+                          <svg v-else class="ac-ico" viewBox="0 0 16 16" aria-hidden="true">
+                            <path
+                              d="M9.2 1.9H4.7A1.7 1.7 0 0 0 3 3.6v8.8a1.7 1.7 0 0 0 1.7 1.7h6.6a1.7 1.7 0 0 0 1.7-1.7V5.5z"
+                            />
+                            <path d="M9.2 1.9v3.6h3.8" />
+                            <path d="M5.4 11.7V8.05l2.6 3.05 2.6-3.05v3.65" />
                           </svg>
                         </button>
                       </template>
@@ -457,7 +482,7 @@ import { renderMarkdown as formatMessage, renderMarkdownToText } from './markdow
 import { copyMessageText } from './clipboard'
 // 导出内容构造（纯函数，见 exporter.ts）：
 //   html / txt / md 产出字符串；docx 产出字节（公文 Word，见 docx.ts）
-import { buildExport, buildOfficeExport, buildMessageText } from './exporter'
+import { buildExport, buildOfficeExport, buildMessageText, buildMessageMarkdown } from './exporter'
 // 存盘：Blob + <a download>，非安全上下文（大屏 http 内网 IP）也能用（见 download.ts）
 import { saveFile } from './download'
 import {
@@ -1393,27 +1418,40 @@ const exportConversation = () => {
 }
 
 /* ------------------------------------------------------------------ *
- * 消息级导出（脚注里的「导出 Word / 导出 TXT」按钮）
+ * 消息级导出（脚注里的「导出 Word / 导出 TXT / 导出 MD」按钮）
  * ------------------------------------------------------------------ */
 
 /** 正在生成文件的消息 id：生成是同步的，但长文档要几十毫秒，用状态兜住重复点击 */
 const exportingId = ref('')
-/** 刚导出成功的按钮，值为 `${消息id}|${格式}` —— 两个按钮各自变对勾 */
+/** 刚导出成功的按钮，值为 `${消息id}|${格式}` —— 三个按钮各自变对勾 */
 const exportedKey = ref('')
+
+/** 消息级导出的三种格式 */
+type MsgExportKind = 'docx' | 'txt' | 'md'
+
+/** 失败提示里的中文名 */
+const exportKindLabel: Record<MsgExportKind, string> = {
+  docx: '导出 Word',
+  txt: '导出 TXT',
+  md: '导出 Markdown'
+}
 
 /**
  * 把单条回答导出成文件。
  *
  *   docx —— 浏览器里现场生成：零依赖手写 zip + OOXML（见 zip.ts / docx.ts），
  *           不经过服务端，也不引任何第三方 Office 库 —— 运行组件是要跟着大屏一起加载的。
- *   txt  —— 就是"渲染后的纯文本"（见 exporter.buildMessageText），不做结构转换，
- *           所以永远不会因为某段 Markdown 没被认出来而丢内容，是"先存下来再说"的兜底。
+ *   txt  —— "渲染后的纯文本"（见 exporter.buildMessageText），不做结构转换，
+ *           所以永远不会因为某段 Markdown 没被认出来而丢内容。
+ *   md   —— "渲染前的原数据"（见 exporter.buildMessageMarkdown），
+ *           一个字符都不改：不转结构、不改换行、不加 BOM，方便留档 / 二次加工 / diff。
  *
  * Word 的文档标题这里不指定：exporter 会取正文里第一个标题当标题、并把那一行从正文摘掉，
  * 否则同一句话会先以二号小标宋居中显示一次、下面又以一级标题显示一次，看着像出错。
- * 正文里没有标题时才退化成"首段前 24 字"，再没有就用"文档"（TXT 文件名走同一套规则）。
+ * 正文里没有标题时才退化成"首段前 24 字"，再没有就用"文档"
+ * （TXT / MD 的文件名走同一套规则，同一条回答导出的三个文件前缀一致）。
  */
-const exportMessage = (msg: ChatMessage, kind: 'docx' | 'txt') => {
+const exportMessage = (msg: ChatMessage, kind: MsgExportKind) => {
   if (exportingId.value) return
   const text = msg.content || ''
   if (!text) return
@@ -1422,12 +1460,14 @@ const exportMessage = (msg: ChatMessage, kind: 'docx' | 'txt') => {
     const res =
       kind === 'txt'
         ? buildMessageText(text)
-        : buildOfficeExport(text, {
-            preset: o.value.docxPreset,
-            titleFont: o.value.docxTitleFont,
-            meta: [`导出时间：${new Date().toLocaleString('zh-CN')}`]
-          })
-    // Word 给的是字节，TXT 给的是字符串 —— 统一交给 saveFile 落盘
+        : kind === 'md'
+          ? buildMessageMarkdown(text)
+          : buildOfficeExport(text, {
+              preset: o.value.docxPreset,
+              titleFont: o.value.docxTitleFont,
+              meta: [`导出时间：${new Date().toLocaleString('zh-CN')}`]
+            })
+    // Word 给的是字节，TXT / MD 给的是字符串 —— 统一交给 saveFile 落盘
     const data = res.bytes && res.bytes.length ? res.bytes : res.content
     if (!data.length) throw new Error('empty')
     if (!saveFile(res.fileName, data, res.mime)) throw new Error('blocked')
@@ -1438,10 +1478,7 @@ const exportMessage = (msg: ChatMessage, kind: 'docx' | 'txt') => {
   } catch (e) {
     // 大屏常在 iframe 里预览，父页面没给 allow-downloads 时点击是静默无效的 ——
     // 这种情况必须说出来，否则用户以为按钮坏了（见 download.ts 顶部说明）
-    showToast(
-      (kind === 'txt' ? '导出 TXT 失败' : '导出 Word 失败') +
-        '：浏览器拦截了下载，试试在新窗口打开大屏，或先复制内容'
-    )
+    showToast(exportKindLabel[kind] + '失败：浏览器拦截了下载，试试在新窗口打开大屏，或先复制内容')
   } finally {
     exportingId.value = ''
   }
@@ -1582,7 +1619,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.4'
+  version: '1.0.5'
 }
 </script>
 

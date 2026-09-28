@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * 真浏览器自检：点一下「导出 Word / TXT」，磁盘上到底有没有出现一个能打开的文件
+ * 真浏览器自检：点一下「导出 Word / TXT / MD」，磁盘上到底有没有出现一个能打开的文件
  *
  *   node tools/verify-office-download.cjs              # 无头（默认）
  *   CHROME_UI=1 node tools/verify-office-download.cjs  # 真实窗口
@@ -49,6 +49,10 @@ const SAMPLE = [
   '',
   '本预案适用于本单位**危险化学品**突发泄漏事故的应急处置。',
   '',
+  '应急指挥部',
+  '总指挥：企业主要负责人',
+  '成员：生产、安全、环保、医疗等部门负责人',
+  '',
   '- 液氯、硫酸等剧毒强腐蚀品的储存环节',
   '- 生产装置区的泄漏事故',
   '',
@@ -83,6 +87,7 @@ const PAGE = `<!DOCTYPE html>
 <body>
 <button id="btn-docx">导出 Word</button>
 <button id="btn-txt">导出 TXT</button>
+<button id="btn-md">导出 MD</button>
 <script>
   var __mods = {};
   window.__define = function (name, fn) {
@@ -101,7 +106,7 @@ ${MODULES.map(compileModule).join('\n')}
   var BL = require('exporter');
   var saveFile = require('download').saveFile;
   window.SAMPLE = ${JSON.stringify(SAMPLE)};
-  window.__res = { docx: null, txt: null, err: null };
+  window.__res = { docx: null, txt: null, md: null, err: null };
 
   /* 与组件里 exportMessage 的核心两行一致：造字节 → 落盘 */
   window.__run = function (kind) {
@@ -127,8 +132,19 @@ ${MODULES.map(compileModule).join('\n')}
       return { err: String((e && e.message) || e) };
     }
   };
+  /* MD 那条链路也是字符串，但**一个字符都不改**（渲染前的原数据） */
+  window.__runMd = function () {
+    try {
+      var res = BL.buildMessageMarkdown(window.SAMPLE, { when: new Date(2026, 8, 28, 19, 30) });
+      var ok = saveFile(res.fileName, res.content, res.mime);
+      return { ok: ok, fileName: res.fileName, mime: res.mime, content: res.content };
+    } catch (e) {
+      return { err: String((e && e.message) || e) };
+    }
+  };
   document.getElementById('btn-docx').onclick = function () { window.__res.docx = window.__run('docx'); };
   document.getElementById('btn-txt').onclick = function () { window.__res.txt = window.__runTxt(); };
+  document.getElementById('btn-md').onclick = function () { window.__res.md = window.__runMd(); };
 </script>
 </body></html>`
 
@@ -387,7 +403,9 @@ async function main() {
       }
     }
 
-    const pageReady = await evalJs('typeof window.__run === "function" && typeof window.__runTxt === "function"')
+    const pageReady = await evalJs(
+      'typeof window.__run === "function" && typeof window.__runTxt === "function" && typeof window.__runMd === "function"'
+    )
     check('页面里的导出模块加载成功', pageReady === true)
 
     /* ---------------- A. Word ---------------- */
@@ -427,6 +445,18 @@ async function main() {
         check('正文里带三号仿宋_GB2312', /仿宋_GB2312/.test(doc))
         check('正文里带二号小标宋标题', /方正小标宋简体/.test(doc))
         check('正文里没有残留 Markdown 加粗符号', !/\*\*/.test(doc))
+
+        /* 落盘产物上再验一次本轮修复：手动换行符换成了回车、段落仍是两端对齐 */
+        check('手动换行符换成了回车（落盘正文里 <w:br/> 数为 0）', doc.indexOf('<w:br/>') < 0)
+        const shortParas = doc
+          .split('<w:p>')
+          .slice(1)
+          .filter(p => /应急指挥部|总指挥：企业主要负责人|成员：生产/.test(p))
+        check('落盘的三个短句各自成一段（不再是同一段里的软换行）',
+          shortParas.length === 3, shortParas.length)
+        check('这三段都是两端对齐（字距不会被拉开）',
+          shortParas.length === 3 && shortParas.every(p => /<w:jc w:val="both"\/>/.test(p)),
+          shortParas.map(p => (p.match(/<w:jc [^/]*\/>/) || ['(无)'])[0]))
       }
       const py = await pythonVerify(p)
       check('Python zipfile 校验落盘文件通过（CRC + XML 独立验证）', py.ok, py.out || py.err)
@@ -467,11 +497,43 @@ async function main() {
         /姓名 \| 危险特性/.test(text) && /液氯/.test(text))
     }
 
-    /* ---------------- C. 两个文件都留下了 ---------------- */
-    console.log('\n【C】目录清点')
+    /* ---------------- C. MD（渲染前的原数据） ---------------- */
+    console.log('\n【C】点击「导出 MD」')
+    await clickReal('#btn-md')
+    await sleep(400)
+    const mdRes = await evalJs('window.__res.md')
+    check('页面侧调用返回成功', mdRes && mdRes.ok === true, JSON.stringify(mdRes && { err: mdRes.err }))
+    check(
+      '文件名是 .md 且与 Word / TXT 前缀一致（同一套标题规则）',
+      mdRes && /危险化学品事故应急预案_\d{8}-\d{4}\.md$/.test(mdRes.fileName),
+      mdRes && mdRes.fileName
+    )
+    check('MIME 是 text/markdown', mdRes && /^text\/markdown/.test(mdRes.mime), mdRes && mdRes.mime)
+
+    const mdName = await waitForFile('.md')
+    check('磁盘上真的出现了 .md 文件', !!mdName, fs.readdirSync(OUT_DIR).join(', ') || '（空）')
+    if (mdName) {
+      const buf = fs.readFileSync(path.join(OUT_DIR, mdName))
+      const want = mdRes && mdRes.content ? Buffer.byteLength(mdRes.content, 'utf8') : -1
+      check('落盘字节数 = 页面里字符串的 UTF-8 编码长度（没被截断）', buf.length === want, {
+        disk: buf.length,
+        page: want
+      })
+      check('落地内容与页面里的原文逐字节相同（下载链路没做任何加工）',
+        buf.toString('utf8') === mdRes.content)
+      check('不带 BOM（原数据不加 BOM）',
+        !(buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf), [buf[0], buf[1], buf[2]])
+      check('换行没被转成 CRLF（LF 原样保留）', buf.toString('utf8').indexOf('\r') < 0)
+      check('Markdown 语法符号都还在（** 与表格分隔行）',
+        buf.toString('utf8').indexOf('**危险化学品**') >= 0 &&
+          buf.toString('utf8').indexOf('| --- |') >= 0)
+    }
+
+    /* ---------------- D. 三个文件都留下了 ---------------- */
+    console.log('\n【D】目录清点')
     const all = fs.readdirSync(OUT_DIR)
-    check('两个文件都在，且没有 .crdownload 残留',
-      all.filter(n => /\.(docx|txt)$/i.test(n)).length === 2 && !all.some(n => n.endsWith('.crdownload')),
+    check('三个文件都在，且没有 .crdownload 残留',
+      all.filter(n => /\.(docx|txt|md)$/i.test(n)).length === 3 && !all.some(n => n.endsWith('.crdownload')),
       all)
 
     ok = fails.length === 0

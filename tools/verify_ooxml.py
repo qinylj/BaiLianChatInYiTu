@@ -351,38 +351,45 @@ def check_docx_dirty(path):
 # ==================================================================== #
 
 def check_layout_regressions(gongwen_path, softbreak_path):
-    section('【D】docx —— 排版回归：软换行不拉伸 / 分割线不落地')
+    section('【D】docx —— 排版回归：手动换行换回车 / 分割线不落地')
 
-    # --- 软换行段落必须左对齐 ---
+    def jc_of(p):
+        ppr = p.find(W + 'pPr')
+        jc = ppr.find(W + 'jc') if ppr is not None else None
+        return jc.get(W + 'val') if jc is not None else None
+
+    # --- 手动换行符（Shift+Enter）必须换成回车（¶）：每行独立成段 ---
     parts = load(softbreak_path)
     if parts:
         doc = parse(parts, 'word/document.xml')
         body = doc.find(W + 'body') if doc is not None else None
         paras = body.findall(W + 'p') if body is not None else []
 
-        multi = [p for p in paras if list(p.iter(W + 'br'))]
-        ck('样本里有且仅有 1 个含软换行的段落', len(multi) == 1, len(multi))
+        ck('整篇不再有手动换行符（w:br 数为 0）',
+           len(list(doc.iter(W + 'br'))) == 0, len(list(doc.iter(W + 'br'))))
+        ck('3 行短句拆成 3 个独立段落（+ 标题段 + 首行段 = 5 段）',
+           len(paras) == 5, len(paras))
 
-        for p in multi:
+        body_paras = paras[1:]
+        ck('正文段落全部两端对齐（w:jc=both，恢复了公文的对齐方式）',
+           all(jc_of(p) == 'both' for p in body_paras), [jc_of(p) for p in body_paras])
+        ck('文档标题仍居中（没有顺手把整篇改成别的对齐）',
+           jc_of(paras[0]) == 'center', jc_of(paras[0]))
+        ck('每段文字各是一行（拆段没拆散、也没吞内容）',
+           [all_text(p, W + 't') for p in body_paras] ==
+           ['一、应急组织机构', '应急指挥部', '总指挥：企业主要负责人',
+            '成员：生产、安全、环保、医疗等部门负责人'],
+           [all_text(p, W + 't') for p in body_paras])
+
+        firsts = []
+        for p in body_paras:
             ppr = p.find(W + 'pPr')
-            jc = ppr.find(W + 'jc') if ppr is not None else None
-            val = jc.get(W + 'val') if jc is not None else None
-            ck('多行段落是左对齐（w:jc=left）', val == 'left', val)
-            ck('多行段落不是两端对齐（否则短行会被拉到版心宽）', val != 'both', val)
-            ck('软换行数正确（3 行 → 2 个 w:br）', len(list(p.iter(W + 'br'))) == 2,
-               len(list(p.iter(W + 'br'))))
-            text = all_text(p, W + 't')
-            ck('软换行段落三行文字都在（没被拆散或吞掉）',
-               '应急指挥部' in text and '总指挥' in text and '成员' in text, repr(text[:80]))
+            ind = ppr.find(W + 'ind') if ppr is not None else None
+            firsts.append(ind.get(W + 'firstLineChars') if ind is not None else None)
+        ck('拆出来的段落都带首行缩进 2 字符（是正经段落，不是靠空格凑的）',
+           firsts == ['200'] * 4, firsts)
 
-        # 反面对照：单行正文段落仍然是两端对齐
-        both = [p for p in paras
-                if not list(p.iter(W + 'br'))
-                and (p.find(W + 'pPr') is not None and p.find(W + 'pPr').find(W + 'jc') is not None
-                     and p.find(W + 'pPr').find(W + 'jc').get(W + 'val') == 'both')]
-        ck('单行正文段落仍是两端对齐（没有把整篇都改左对齐）', len(both) == 1, len(both))
-
-    # --- 分割线不落地 ---
+    # --- 分割线不落地 + 全局不变式 ---
     parts = load(gongwen_path)
     if parts:
         doc = parse(parts, 'word/document.xml')
@@ -393,6 +400,12 @@ def check_layout_regressions(gongwen_path, softbreak_path):
             ck('分割线没有留下横线字符', '---' not in text, repr(text[:160]))
             ck('分割线前后的正文都还在（只丢了那一行）',
                '12345' in text and '本预案自发布之日起施行' in text, repr(text[-80:]))
+
+            # 不变式：谁把带 \n 的文本直接丢给段落生成器，这里就会红
+            bad = [all_text(p, W + 't') for p in doc.iter(W + 'p')
+                   if jc_of(p) == 'both' and list(p.iter(W + 'br'))]
+            ck('不变式：两端对齐的段落里没有手动换行符（否则短行字距会被拉开）',
+               len(bad) == 0, bad)
 
 
 # ==================================================================== #
@@ -423,6 +436,28 @@ def check_txt(path):
 
 
 # ==================================================================== #
+# Markdown 原文（渲染前的原数据）
+# ==================================================================== #
+
+def check_md(path):
+    """MD 是"渲染前的原数据"：Python 侧只验**没被加工过**，越原样越好"""
+    section('【F】Markdown 原文 —— 渲染前的原数据不得被加工')
+    if not os.path.exists(path):
+        ck('产物存在 case-content.md', False, path)
+        return
+    raw = open(path, 'rb').read()
+    ck('case-content.md 存在且非空', len(raw) > 200, len(raw))
+    ck('不带 BOM（带了就不再是原数据）', raw[:3] != b'\xef\xbb\xbf', raw[:6])
+    text = raw.decode('utf-8')
+    ck('换行保持原样（LF，没有被转成 CRLF）', '\r' not in text, repr(text[:80]))
+    ck('Markdown 语法符号全在（渲染前该有的样子）',
+       '**危险化学品**' in text and '| --- |' in text and '```bash' in text)
+    ck('分割线 `---` 仍是原文的一部分（只有 Word 导出才丢它）', '\n---\n' in text)
+    ck('正文内容完整（关键句都在）',
+       '本预案自发布之日起施行' in text and '液氯' in text)
+
+
+# ==================================================================== #
 
 BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.tmp', 'office-out')
 
@@ -442,6 +477,7 @@ def main():
     check_docx_dirty(p('case-dirty.docx'))
     check_layout_regressions(p('case-gongwen.docx'), p('case-softbreak.docx'))
     check_txt(p('case-content.txt'))
+    check_md(p('case-content.md'))
 
     print('\n' + '=' * 68)
     if fails:

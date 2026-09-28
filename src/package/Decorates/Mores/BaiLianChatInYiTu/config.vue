@@ -101,17 +101,17 @@
                 />
               </div>
 
-              <!-- 消息级导出：每条回答脚注里的「导出 Word / TXT」，
+              <!-- 消息级导出：每条回答脚注里的「导出 Word / TXT / MD」，
                    与顶栏「导出」的区别是只导当前这一条，不导整个会话 -->
               <div class="sub3">
                 <div class="sub3-head">消息导出按钮</div>
                 <CustomSwitch
-                  label="显示 Word / TXT 按钮"
+                  label="显示 Word / TXT / MD 按钮"
                   v-model:value="optionData.showMsgExport"
                   elMarginBottom="10px"
                 />
                 <template v-if="optionData.showMsgExport">
-                  <div class="subtitle">Word 排版（TXT 导出不受此影响）</div>
+                  <div class="subtitle">Word 排版（TXT / MD 导出不受此影响）</div>
                   <CustomInputSelect
                     label="排版预设"
                     v-model:value="optionData.docxPreset"
@@ -127,10 +127,12 @@
                     <div class="tip">
                       「标准公文格式」按 GB/T 9704—2012 排版：页边距上 37 / 下 35 / 左 28 / 右 26 mm，
                       正文三号仿宋_GB2312，固定行距 28.8 磅，首行缩进 2 字符，标题二号小标宋居中，
-                      页脚「— 1 —」页码。<br />
+                      页脚「— 1 —」页码。模型写的手动换行（一句一行）会换成回车，
+                      每行独立成段，不会出现字距被拉开的「应　　急　　指　　挥　　部」。<br />
                       标题字体「方正小标宋简体」需本机已安装，未安装时 Word 会自动回退成默认字体。<br />
-                      「导出 TXT」给的是渲染后的纯文本（去掉 Markdown 符号、含 BOM 与 CRLF），
-                      不含排版、不受上面两项设置影响。
+                      「导出 TXT」给的是渲染后的纯文本（去掉 Markdown 符号、含 BOM 与 CRLF）；
+                      「导出 MD」给的是渲染**前**的原数据（Markdown 源码原样，不改换行、不加 BOM）。
+                      这两种都不含排版、不受上面两项设置影响。
                     </div>
                   </div>
                 </template>

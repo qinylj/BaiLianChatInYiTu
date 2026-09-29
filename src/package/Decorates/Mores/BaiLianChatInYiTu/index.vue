@@ -220,11 +220,12 @@
                   <template v-else>{{ targetAvatar }}</template>
                 </div>
                 <div class="ac-msg-body">
-                  <!-- 思考过程（面板：基础 → 对话设置 → 显示思考过程）
-                       关掉只是不渲染；m.thought 仍照常累积，重新打开就能看到历史那几轮。 -->
+                  <!-- 思考过程（面板里按对话对象配置：大模型 → 模型配置 / 智能体 → 智能体配置）
+                       关掉只是不渲染；m.thought 仍照常累积，重新打开就能看到历史那几轮。
+                       看的是「当前会话所属对象」的开关 —— 切到别的会话时会跟着变。 -->
                   <!-- 思考过程：生成中自动展开、完成后自动收起（open 跟随 pending，
                        用户手动开合不受影响 —— Vue 只在绑定值变化时才补丁属性） -->
-                  <details v-if="o.showThought && m.thought" class="ac-thought" :open="m.pending">
+                  <details v-if="curShowThought && m.thought" class="ac-thought" :open="m.pending">
                     <summary>思考过程</summary>
                     <div class="ac-thought-text">{{ m.thought }}</div>
                   </details>
@@ -579,18 +580,28 @@ const mergeOption = (raw: any) => {
   // 下沉到智能体的字段：旧配置的智能体还没有自己的 paramBindings / apiKey / timeoutMs，
   // 用全局那份兜底。用 map 返回新数组而不是就地改元素，
   // 避免在 def.agents 被复用为源时把模块级默认值改掉。
-  out.agents = out.agents.map((a: any) => {
-    const needParams = !Array.isArray(a.paramBindings)
-    const needKey = a.apiKey === undefined || a.apiKey === null
-    const needTimeout = !Number(a.timeoutMs)
-    if (!needParams && !needKey && !needTimeout) return a
-    return {
-      ...a,
-      paramBindings: needParams ? JSON.parse(JSON.stringify(out.paramBindings || [])) : a.paramBindings,
-      apiKey: needKey ? out.gateway.apiKey || '' : a.apiKey,
-      timeoutMs: needTimeout ? Number(out.gateway.timeoutMs) || 120000 : a.timeoutMs
-    }
-  })
+  // stream / showThought 同理：这两个开关原先是全局的（面板「对话设置」组），
+  // 现已按对象配置，旧配置升级上来时把全局那份复制到每个条目上，保证行为不变。
+  const withTargetFlags = (a: any, out: any, isAgent: boolean): any => {
+    // 显式存过（true/false 都算）就不动；只有 undefined 才回退全局 ——
+    // 否则用户把一个条目关掉、其余开着的差异化配置会被全局值洗平
+    const needStream = a.stream === undefined || a.stream === null
+    const needThought = a.showThought === undefined || a.showThought === null
+    // apiKey / timeoutMs / paramBindings 只有智能体有，别给大模型凭空添字段
+    const needParams = isAgent && !Array.isArray(a.paramBindings)
+    const needKey = isAgent && (a.apiKey === undefined || a.apiKey === null)
+    const needTimeout = isAgent && !Number(a.timeoutMs)
+    if (!needParams && !needKey && !needTimeout && !needStream && !needThought) return a
+    const next: any = { ...a }
+    if (needParams) next.paramBindings = JSON.parse(JSON.stringify(out.paramBindings || []))
+    if (needKey) next.apiKey = out.gateway.apiKey || ''
+    if (needTimeout) next.timeoutMs = Number(out.gateway.timeoutMs) || 120000
+    if (needStream) next.stream = out.stream !== false
+    if (needThought) next.showThought = out.showThought !== false
+    return next
+  }
+  out.agents = out.agents.map((a: any) => withTargetFlags(a, out, true))
+  out.models = out.models.map((m: any) => withTargetFlags(m, out, false))
   return out
 }
 
@@ -754,6 +765,14 @@ const target = computed<any>(() => {
 
 const targetKind = computed<TargetKind>(() => (target.value ? kindOf(target.value) : localKind.value))
 const isActive = (kind: TargetKind, id: string) => targetKind.value === kind && target.value?.id === id
+
+/* 「流式输出 / 显示思考过程」按对话对象配置（面板：模型配置 / 智能体配置里）。
+ * 条目上没配（undefined，旧配置升级上来就是这样）时回退到全局 option 那两个值。
+ * 判据用 `!== false` 而不是 `=== true`：undefined 要当成"开"，别把老实例默认关掉。 */
+const streamOf = (t: any) => (t && t.stream !== undefined ? t.stream !== false : o.value.stream !== false)
+const showThoughtOf = (t: any) => (t && t.showThought !== undefined ? t.showThought !== false : o.value.showThought !== false)
+/** 当前对话对象是否显示思考过程，给模板用（流式走 streamOf(t)，按每条会话所属的对象取） */
+const curShowThought = computed(() => showThoughtOf(target.value))
 
 const targetName = computed(() => (target.value && target.value.name) || '未配置对话对象')
 const targetAvatar = computed(() => (target.value && target.value.avatar) || '🤖')
@@ -1298,7 +1317,7 @@ const send = async (preset?: string) => {
         sessionId,
         { text: text + attachNote(atts), metadata: buildMetadata() },
         onChunkInto(aiMsg),
-        o.value.stream !== false,
+        streamOf(agent),
         signal
       )
     } else {
@@ -1320,7 +1339,7 @@ const send = async (preset?: string) => {
         },
         history,
         onChunkInto(aiMsg),
-        o.value.stream !== false,
+        streamOf(model),
         signal
       )
     }
@@ -1691,7 +1710,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.11'
+  version: '1.0.12'
 }
 </script>
 

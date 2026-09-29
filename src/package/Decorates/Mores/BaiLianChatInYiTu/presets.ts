@@ -308,6 +308,8 @@ export const DEFAULT_AGENTS: AgentItem[] = [
     accent: '#22c55e',
     apiKey: '',
     timeoutMs: 120000,
+    stream: true,
+    showThought: true,
     agentCode: '',
     agentVersion: '',
     welcome: '您好，这里是防汛事件处置建议，请描述需要处置的事件情况。',
@@ -329,6 +331,8 @@ export const DEFAULT_AGENTS: AgentItem[] = [
     accent: '#f59e0b',
     apiKey: '',
     timeoutMs: 180000,
+    stream: true,
+    showThought: true,
     agentCode: '',
     agentVersion: '',
     welcome: '您好，这里是防汛事件评价复盘，请提供需要复盘的事件信息。',
@@ -349,6 +353,8 @@ export const DEFAULT_AGENTS: AgentItem[] = [
     accent: '#a855f7',
     apiKey: '',
     timeoutMs: 120000,
+    stream: true,
+    showThought: true,
     agentCode: '',
     agentVersion: '',
     welcome: '您好，这里是水污染事件处置建议，请描述需要处置的事件情况。',
@@ -370,6 +376,8 @@ export const DEFAULT_AGENTS: AgentItem[] = [
     accent: '#06b6d4',
     apiKey: '',
     timeoutMs: 120000,
+    stream: true,
+    showThought: true,
     agentCode: '',
     agentVersion: '',
     welcome: '您好，这里是水污染事件辅助溯源，请提供监测点位与异常数据。',
@@ -390,6 +398,8 @@ export const DEFAULT_AGENTS: AgentItem[] = [
     accent: '#4f8cff',
     apiKey: '',
     timeoutMs: 90000,
+    stream: true,
+    showThought: true,
     agentCode: '',
     agentVersion: '',
     welcome: '您好，这里是汛情简报生成，请提供需要汇总的汛情信息。',
@@ -425,7 +435,9 @@ export const DEFAULT_MODELS: ModelItem[] = [
        且它的 max_tokens 是「思考过程 + 正文」的合计额度 ——
        开「显示思考过程」时给小了会被思考吃光，正文直接空掉 */
     maxTokens: 32768,
-    enabled: true
+    enabled: true,
+    stream: true,
+    showThought: true,
   },
   {
     id: 'model-qwen',
@@ -443,7 +455,9 @@ export const DEFAULT_MODELS: ModelItem[] = [
     system: '你是一个专业、严谨的助手，回答尽量简洁准确。',
     temperature: 0.8,
     maxTokens: 1500,
-    enabled: true
+    enabled: true,
+    stream: true,
+    showThought: true,
   }
 ]
 

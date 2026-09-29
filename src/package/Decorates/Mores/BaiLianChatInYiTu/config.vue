@@ -369,15 +369,9 @@
             <span class="grp-title">对话设置</span>
           </div>
           <div v-show="isOpen('session')" class="grp-body">
-            <!-- 思考过程排在「流式输出」上方：它俩是同一个问题的两面 ——
-                 流式决定"边生成边出字"，思考过程决定"要不要把思考那路也显示出来"。
-                 非流式（整包返回）时思考过程一样能拿到，所以两者互不依赖。 -->
-            <CustomSwitch
-              label="显示思考过程"
-              v-model:value="optionData.showThought"
-              elMarginBottom="10px"
-            />
-            <CustomSwitch label="流式输出" v-model:value="optionData.stream" elMarginBottom="10px" />
+            <!-- 「流式输出 / 显示思考过程」原先在这里，现已下沉到每个对话对象：
+                 大模型 → 模型配置（系统提示词下）；智能体 → 智能体配置（超时下）。
+                 顶层那两个值只在旧配置升级时当迁移源用，面板上不再出现。 -->
             <CustomSwitch label="保存历史对话" v-model:value="optionData.persistHistory" elMarginBottom="10px" />
             <CustomSwitch
               label="首轮自动创建会话"
@@ -527,6 +521,12 @@
                 :step="1000"
                 v-model:value="a.timeoutMs"
               />
+              <!-- 思考过程排在「流式输出」上方：它俩是同一个问题的两面 ——
+                   流式决定"边生成边出字"，思考过程决定"要不要把思考那路也显示出来"。
+                   非流式（整包返回）时思考过程一样能拿到，所以两者互不依赖。
+                   每个智能体各配各的：返回快的可以整包返回更稳，慢的必须流式才不超时。 -->
+              <CustomSwitch label="显示思考过程" v-model:value="a.showThought" elMarginBottom="10px" />
+              <CustomSwitch label="流式输出" v-model:value="a.stream" elMarginBottom="10px" />
             </div>
 
             <!-- ---------- L2 该智能体专属参数（放在该智能体最后） ---------- -->
@@ -700,12 +700,16 @@
               <!-- 一般额度是「思考 + 正文」合计，这句话不写清就一定会被踩 -->
               <div class="tip">
                 上限 1048576（1M上下文）。注意额度一般是「思考过程 + 正文」的合计，
-                开着「显示思考过程」时给太小会被思考吃光、正文变空。
+                本模型开着「显示思考过程」时给太小会被思考吃光、正文变空。
               </div>
               <div class="field">
                 <div class="field-label">系统提示词</div>
                 <n-input class="ta-grow" v-model:value="m.system" type="textarea" :rows="4" resizable size="small" />
               </div>
+              <!-- 与智能体同构：按模型配置，思考过程排在流式输出上方。
+                   R1 这类推理模型默认就会吐 reasoning_content，不想给用户看就在这里关。 -->
+              <CustomSwitch label="显示思考过程" v-model:value="m.showThought" elMarginBottom="10px" />
+              <CustomSwitch label="流式输出" v-model:value="m.stream" elMarginBottom="10px" />
             </div>
           </n-collapse-item>
             </n-collapse>
@@ -946,6 +950,8 @@ const addAgent = () => {
     // 新智能体给一份空白凭证，用户按自己的百炼应用填
     apiKey: '',
     timeoutMs: 120000,
+    stream: true,
+    showThought: true,
     agentCode: '',
     agentVersion: '',
     welcome: '',
@@ -981,7 +987,9 @@ const addModel = () => {
     system: '你是一个专业、严谨的助手，回答尽量简洁准确。',
     temperature: 0.7,
     maxTokens: 32768,
-    enabled: true
+    enabled: true,
+    stream: true,
+    showThought: true
   }
   o.models.push(item)
 }

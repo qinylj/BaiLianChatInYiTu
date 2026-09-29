@@ -71,6 +71,18 @@ export interface AgentItem {
   apiKey: string
   /** 该智能体的请求超时（ms），留空/为 0 时回退到全局网关的 timeoutMs */
   timeoutMs: number
+  /**
+   * 该智能体是否流式输出（边生成边出字）。
+   * 每个对象各配各的：有的智能体返回快、整包返回更稳，有的必须流式才不超时。
+   * 未配置（undefined）时回退到全局 option.stream（旧配置的迁移源）。
+   */
+  stream?: boolean
+  /**
+   * 该智能体是否显示思考过程。
+   * 关掉只是不渲染，思考内容仍会照常累积到消息上 —— 重新打开就能看到历史那几轮。
+   * 未配置（undefined）时回退到全局 option.showThought（旧配置的迁移源）。
+   */
+  showThought?: boolean
   agentCode: string
   agentVersion: string
   /** 欢迎语（面板上叫「欢迎语」，早期版本叫「开场白」）：欢迎页正文为空时用它兜底 */
@@ -120,6 +132,16 @@ export interface ModelItem {
   temperature: number
   maxTokens: number
   enabled: boolean
+  /**
+   * 该模型是否流式输出（边生成边出字）。
+   * 与智能体同构：按对象配置，未配置（undefined）时回退到全局 option.stream。
+   */
+  stream?: boolean
+  /**
+   * 该模型是否显示思考过程（OpenAI 兼容取 delta.reasoning_content）。
+   * 与智能体同构：按对象配置，未配置（undefined）时回退到全局 option.showThought。
+   */
+  showThought?: boolean
 }
 
 /** 传给百炼智能体的参数绑定 */

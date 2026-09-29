@@ -173,13 +173,21 @@ export const option = {
   /** 参数挂在 message.metadata 下（百炼 run 接口的扩展字段） */
   paramTarget: 'metadata' as 'metadata' | 'both',
 
-  /* ---------------- 会话 ---------------- */
+  /* ---------------- 会话 ----------------
+   * 「流式输出 / 显示思考过程」已下沉到每个对话对象：
+   * 大模型在 ModelItem.stream / showThought（面板：大模型 → 模型配置，系统提示词下），
+   * 智能体在 AgentItem.stream / showThought（面板：智能体 → 智能体配置，超时下）。
+   * 这两个顶层值不再出现在面板上，只作两处用途：
+   *   ① 新增条目的默认值来源；② 旧版本配置升级时的迁移源
+   *      （旧配置只有全局一份，mergeOption 会把它们复制到每个条目上）。
+   */
   stream: true,
   /**
-   * 显示思考过程（面板：基础 → 对话设置 → 显示思考过程，排在「流式输出」上方）。
-   * 两种协议都能给到思考过程：OpenAI 兼容取 delta.reasoning_content，
+   * 显示思考过程。两种协议都能给到思考过程：OpenAI 兼容取 delta.reasoning_content，
    * 百炼取 object/type 含 thought 的分片（见 api.ts 的 extractOpenAIChunk / extractBailianChunk）。
-   * 关掉后只是不渲染，仍会照常累积到消息上 —— 重新打开就能看到历史那几轮的思考。
+   * 关掉后只是不渲染，仍会照常累积到消息上 —— 重新打开就能看到历史那几轮。
+   *
+   * ★ 面板上已改为按对话对象配置（见上面 stream 的说明），这里保留为迁移源。
    */
   showThought: true,
   /** localStorage 持久化历史会话 */

@@ -140,6 +140,7 @@ BaiLianChatInYiTu/
 │   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（68 项）
 │   ├── cdp-verify-conv-switch.cjs # 真浏览器自检：对话对象 ↔ 当前会话 的状态一致（12 项，需 dev server + /settings）
 │   ├── cdp-verify-default-target.cjs # 真浏览器自检：面板「默认选中」哪个，预览就是哪个（8 项，需 dev server）
+│   ├── cdp-verify-per-target-toggles.cjs # 真浏览器自检：流式/思考开关按对话对象配置且真的生效（15 项，需 dev server）
 └── src/
     ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（16 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
@@ -219,8 +220,15 @@ npm run pack         # 已编译过，只想重新打 zip
 | 大模型 tab | `baseUrl` / `model` / `apiKey` | 直连 OpenAI 兼容模型时用 |
 | 对话设置 | 最大 Token | 默认 32768。**注意 DeepSeek-R1 的 `max_tokens` 是「思考 + 正文」合计额度**，开思考过程时给小了正文会空 |
 
-面板顶部有「显示思考过程」「流式输出」开关；历史对话持久化、上下文条数、首轮自动建会话
-都在「对话设置」组里。
+**「显示思考过程」「流式输出」按对话对象配置**，各配各的：
+
+- 大模型 → `模型配置` 组，排在「系统提示词」框下面
+- 智能体 → `智能体配置` 组，排在「智能体超时(ms)」下面
+
+原来这两个开关在「对话设置」组里（全局一份）。顶层 `option.stream` / `option.showThought`
+仍保留，但面板上不再出现，只作两处用途：新增条目的默认值、旧配置升级时的迁移源
+（升级时旧值会被复制到每个条目上，行为不变；条目上显式存过 true/false 就不动它）。
+历史对话持久化、上下文条数、首轮自动建会话仍在「对话设置」组里。
 
 **切换对话对象的语义**：点顶部某个大模型 / 智能体时，回到该对象**最近用过的那条会话**，
 只有该对象一条会话都没有时才新建 —— 不会每次点回去都冒出一条空对话
@@ -247,6 +255,7 @@ node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → �
 node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 9 项 / CHROME_UI=1 共 20 项）
 node tools/cdp-verify-conv-switch.cjs    # 真浏览器：切回已有对话对象不新建 / 删会话后顶部跟随（12 项）
 node tools/cdp-verify-default-target.cjs # 真浏览器：面板「默认选中」哪个智能体，预览就是哪个（8 项）
+node tools/cdp-verify-per-target-toggles.cjs # 真浏览器：流式/思考开关在指定位置且按对象生效（15 项）
 ```
 
 三个说明：

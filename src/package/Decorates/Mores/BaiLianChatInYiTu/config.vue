@@ -103,17 +103,6 @@
                 </div>
 
                 <CustomSwitch label="显示关闭按钮" v-model:value="optionData.showCloseBtn" elMarginBottom="10px" />
-                <template v-if="optionData.showCloseBtn">
-                  <div class="tip">点击后置平台 chartConfig.status.hide，把本组件从大屏移除。</div>
-                  <CustomInput label="按钮提示文字" v-model:value="optionData.closeText" placeholder="关闭" />
-                  <CustomSwitch label="关闭前二次确认" v-model:value="optionData.closeConfirm" elMarginBottom="10px" />
-                  <CustomInput
-                    v-if="optionData.closeConfirm"
-                    label="确认文案"
-                    v-model:value="optionData.closeConfirmText"
-                    placeholder="确定关闭该对话窗口？"
-                  />
-                </template>
               </div>
 
               <div class="sub3">
@@ -375,14 +364,14 @@
         <div class="grp">
           <div class="grp-head" @click="toggle('gateway')">
             <span class="grp-arrow" :class="{ open: isOpen('gateway') }"></span>
-            <span class="grp-title">智能体开发平台2.0网关</span>
+            <span class="grp-title">百炼（2.0平台）网关</span>
             <em class="grp-badge">全部智能体共用</em>
           </div>
           <div v-show="isOpen('gateway')" class="grp-body">
             <CustomInput label="网关地址" v-model:value="optionData.gateway.baseUrl" />
             <div class="tip">
-              所有智能体共用这一个地址，改一处即对全部生效。
-              地址填到 <code>/gateway/agent/api</code> 为止，后面的 createSession / run 等路径由组件拼接。
+              所有智能体共用地址，改一处全部生效。
+              地址填到 <code>/agent/api</code> 为止，后面的createSession等路径由组件拼接。
             </div>
           </div>
         </div>

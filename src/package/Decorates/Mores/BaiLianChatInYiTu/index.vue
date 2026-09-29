@@ -1667,7 +1667,7 @@ const topbarSub = computed(() => {
 })
 
 const summaryText = computed(
-  () => `${enabledAgents.value.length} 个智能体 · ${enabledModels.value.length} 个大模型`
+  () => `${enabledModels.value.length} 个大模型 · ${enabledAgents.value.length} 个智能体`
 )
 
 /* ------------------------------------------------------------------ *
@@ -1779,7 +1779,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.15'
+  version: '1.0.16'
 }
 </script>
 

@@ -268,7 +268,7 @@ index 6fe648e..07a62d0 100644
 +  // 使用方式：把组件「参数」tab 里的网关地址填成 /bailian/gateway/agent/api
 +  proxy: {
 +    "/bailian": {
-+      target: "http://23.210.227.120",
++      target: "http://23.210.227.35:23343",
 +      changeOrigin: true,
 +      pathRewrite: { "^/bailian": "/xlm-gateway-ftlzsf/sfm-api-gateway" }
 +    }

@@ -139,6 +139,7 @@ BaiLianChatInYiTu/
 │   ├── verify_ooxml.py            # Python 标准库独立复验产物（179 项：zipfile 验 CRC、ElementTree 验 XML）
 │   ├── verify-office-download.cjs # 真浏览器自检：点导出按钮后磁盘上是否真的出现文件（68 项）
 │   ├── cdp-verify-conv-switch.cjs # 真浏览器自检：对话对象 ↔ 当前会话 的状态一致（12 项，需 dev server + /settings）
+│   ├── cdp-verify-default-target.cjs # 真浏览器自检：面板「默认选中」哪个，预览就是哪个（8 项，需 dev server）
 └── src/
     ├── package/Decorates/Mores/BaiLianChatInYiTu/   # 组件本体（16 个文件）
     │   ├── index.ts            # 组件标识：key / chartKey / conKey、分类、标题
@@ -224,8 +225,13 @@ npm run pack         # 已编译过，只想重新打 zip
 **切换对话对象的语义**：点顶部某个大模型 / 智能体时，回到该对象**最近用过的那条会话**，
 只有该对象一条会话都没有时才新建 —— 不会每次点回去都冒出一条空对话
 （要新开一条请点历史区右上角的「＋ 新对话」）。反过来，底部选中哪条会话
-（点历史条目 / 删掉当前会话 / 刷新重载），顶部就高亮那条会话所属的对象，两边始终一致：
-**不会出现「底部高亮 A、顶部还停在 B」的错位** —— 错位时再发一条会发到 B 那边去。
+（点历史条目 / 删掉当前会话），顶部就高亮那条会话所属的对象。
+
+**面板里配的「默认对话 → 默认选中」优先级最高**：组件初始化时如果读到本地历史，
+不会用历史第一条去盖掉你选的默认对象，而是让底部也切到该对象最近的那条会话
+（该对象还没有会话就不选中任何一条，等发第一条消息时再建）；
+**没配 targetId 时**才反过来让顶部跟随历史第一条。面板里改默认对象也一样：
+顶部和底部一起换，不留「主区显示 A 的历史、顶部却是 B」的错位。
 
 ---
 
@@ -240,6 +246,7 @@ node tools/verify-office-export.cjs      # Word 生成 / 排版回归 / 层次�
 node tools/verify-office-download.cjs    # 真浏览器：点三个按钮 → 磁盘上出现三个文件，68 项
 node tools/verify-copy-clipboard.cjs     # 真浏览器剪贴板载荷（无头 9 项 / CHROME_UI=1 共 20 项）
 node tools/cdp-verify-conv-switch.cjs    # 真浏览器：切回已有对话对象不新建 / 删会话后顶部跟随（12 项）
+node tools/cdp-verify-default-target.cjs # 真浏览器：面板「默认选中」哪个智能体，预览就是哪个（8 项）
 ```
 
 三个说明：

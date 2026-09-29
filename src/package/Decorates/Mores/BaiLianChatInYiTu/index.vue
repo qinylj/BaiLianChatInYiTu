@@ -731,12 +731,16 @@ watch(
   () => o.value.targetKind,
   v => {
     localKind.value = v === 'model' ? 'model' : 'agent'
+    syncConvFromConfiguredTarget()
   }
 )
 watch(
   () => o.value.targetId,
   v => {
     localId.value = v || ''
+    /* 面板里改了默认对象：底部也要跟着切走，否则会留着上一个对象的会话高亮
+       —— 主区显示 A 的历史、顶部却是 B，此时再发一条会发到 B 去 */
+    syncConvFromConfiguredTarget()
   }
 )
 
@@ -901,8 +905,12 @@ const loadStore = () => {
       conversations.value = conversations.value.slice(0, Math.max(1, limit))
       if (conversations.value[0]) {
         activeId.value = conversations.value[0].id
-        /* 同上：读完历史后顶部对话对象也要落到这条会话所属的对象上 */
-        syncTargetFromActive()
+        /*
+         * ★ 面板里配了默认对话对象 → **以配置为准**（底部也切到该对象的会话）；
+         *   没配 targetId 时，才反过来让顶部跟随底部第一条。
+         *   顺序搞反的表现：大屏上明明选了智能体 B，刷新后却回到历史第一条所属的智能体 A。
+         */
+        if (!syncConvFromConfiguredTarget()) syncTargetFromActive()
       }
     }
   } catch (e) {
@@ -995,6 +1003,32 @@ const openConversation = (id: string) => {
   activeId.value = id
   syncTargetFromActive()
   nextTick(scrollToBottom)
+}
+
+/**
+ * 反向同步：让「当前会话」跟随面板里配置的默认对话对象。
+ * 底部切到该对象最近的那条会话；该对象还没有会话就**不选中任何一条**
+ * （顶部仍然是配置的那个对象，等发第一条消息时再建会话）。
+ *
+ * ★ 配置是用户的显式意图，优先级高于"历史第一条"：
+ *   初次加载时若反过来用历史第一条覆盖顶部，用户在面板里选的默认对象就白选了；
+ *   面板里改默认对象时若不同步底部，就会留着上一个对象的会话高亮 ——
+ *   主区显示 A 的历史、顶部却是 B，再发一条会发到 B 去。
+ *
+ * @returns 是否真的接管了（配置为空或指向的对象已不在清单里时返回 false）
+ */
+const syncConvFromConfiguredTarget = (): boolean => {
+  const cfgKind: TargetKind = o.value.targetKind === 'model' ? 'model' : 'agent'
+  const cfgId = String(o.value.targetId || '')
+  if (!cfgId) return false
+  const list: any[] = cfgKind === 'model' ? enabledModels.value : enabledAgents.value
+  /* 配置指向的对象已被删除/停用，就当没配，别硬扭出一个空状态 */
+  if (!list.some(i => i.id === cfgId)) return false
+  const mine = conversations.value.filter(c => c.targetKind === cfgKind && c.targetId === cfgId)
+  activeId.value = mine.length
+    ? mine.reduce((a, b) => (Number(b.updatedAt || 0) > Number(a.updatedAt || 0) ? b : a)).id
+    : ''
+  return true
 }
 
 /**
@@ -1657,7 +1691,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.10'
+  version: '1.0.11'
 }
 </script>
 

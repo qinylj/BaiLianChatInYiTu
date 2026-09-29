@@ -52,8 +52,8 @@ export const option = {
   stopText: '停止',
   exportText: '导出',
   /** 关闭按钮：显示在顶栏最右侧，点击后按平台约定置 chartConfig.status.hide 移除本组件。
-   *  默认关闭 —— 大屏上的组件通常由页面统一管理，不期望右上角多出一个叉 */
-  showCloseBtn: false,
+   *  默认打开 —— 让用户能随手关掉对话窗口；不想要可在面板里关掉「显示关闭按钮」 */
+  showCloseBtn: true,
   closeText: '关闭',
   /** 关闭前是否二次确认（误点代价高时打开） */
   closeConfirm: false,

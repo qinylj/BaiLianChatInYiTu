@@ -93,12 +93,14 @@
                 <CustomSwitch label="显示顶部信息栏" v-model:value="optionData.showTopbar" elMarginBottom="10px" />
                 <!-- 停止按钮已移到输入区的发送键上（生成中时发送键变停止），这里只剩导出 -->
                 <CustomSwitch label="显示导出按钮" v-model:value="optionData.showActions" elMarginBottom="10px" />
-                <CustomInputSelect
-                  v-if="optionData.showActions"
-                  label="导出格式"
-                  v-model:value="optionData.exportFormat"
-                  :options="exportFormatOptions"
-                />
+                <div class="select-row">
+                  <CustomInputSelect
+                    v-if="optionData.showActions"
+                    label="导出格式"
+                    v-model:value="optionData.exportFormat"
+                    :options="exportFormatOptions"
+                  />
+                </div>
               </div>
 
               <div class="sub3">
@@ -158,12 +160,14 @@
                   v-model:value="optionData.showMsgExport"
                   elMarginBottom="10px"
                 />
-                <CustomInputSelect
-                  v-if="optionData.showMsgExport"
-                  label="Word 排版"
-                  v-model:value="optionData.docxPreset"
-                  :options="docxPresetOptions"
-                />
+                <div class="select-row">
+                  <CustomInputSelect
+                    v-if="optionData.showMsgExport"
+                    label="Word 排版"
+                    v-model:value="optionData.docxPreset"
+                    :options="docxPresetOptions"
+                  />
+                </div>
               </div>
 
               <!-- 由原一级设置降级下来，与上面三个区域平级 -->
@@ -312,13 +316,17 @@
             <span class="grp-title">默认对话</span>
           </div>
           <div v-show="isOpen('target')" class="grp-body">
-            <CustomInputSelect label="类型" v-model:value="optionData.targetKind" :options="targetKindOptions" />
-            <CustomInputSelect
-              label="默认选中"
-              v-model:value="optionData.targetId"
-              :options="targetIdOptions"
-              clearable
-            />
+            <div class="select-row">
+              <CustomInputSelect label="类型" v-model:value="optionData.targetKind" :options="targetKindOptions" />
+            </div>
+            <div class="select-row">
+              <CustomInputSelect
+                label="默认选中"
+                v-model:value="optionData.targetId"
+                :options="targetIdOptions"
+                clearable
+              />
+            </div>
             <div class="tip">留空则取清单里第一个启用的对象。</div>
           </div>
         </div>
@@ -510,7 +518,9 @@
                 </div>
                 <CustomInput label="显示名" v-model:value="p.label" placeholder="徽章上展示的键名" />
                 <CustomInput label="传给智能体的键名" v-model:value="p.name" placeholder="user" />
-                <CustomInputSelect label="取值方式" v-model:value="p.source" :options="paramSourceOptions" />
+                <div class="select-row">
+                  <CustomInputSelect label="取值方式" v-model:value="p.source" :options="paramSourceOptions" />
+                </div>
                 <CustomInput
                   v-if="p.source === 'public'"
                   label="大屏公共参数名"
@@ -1159,6 +1169,75 @@ const addAgentParam = (a: any) => {
     /* 数字框保持原宽（里面还有上下步进按钮，压窄会切字） */
     flex: 0 0 70px;
     width: 70px;
+  }
+}
+
+/* ---------------- 下拉行（CustomInputSelect）----------------
+   平台这个控件的 label 在 n-form-item 里被固定成 60px、右边留给 n-select。
+   面板 300px 宽时，三级组（.sub3）内容区只有 208px：
+     60px 标签 + 148px 剩余
+   但 `.n-form-item-blank` 默认 `min-width: auto`（下限 = 内容宽 168px），
+   压不到 148px ⇒ 整行右端顶出组边框 20px。用户截图里
+   「导出格式 = HTML（渲染后的排版）」的箭头紧贴边框、文案被压住，就是这个溢出。
+
+   实测（面板 300px / 3 级组）修复前后：
+     修复前：n-select 168px，右边界超出组内容区 20px，箭头贴边
+     修复后：n-select 152px，恰好收在组内容区内（余 0px）
+
+   还有第二层问题：naive-ui 的 `.n-base-selection-label` 没有 overflow:hidden，
+   文字（"HTML（渲染后的排版）" 实测 130px）比可用区（152 − 12 − 26 = 114px）宽时
+   会直接顶出右边界，与箭头叠在一起。
+   ⇒ 这里补上 overflow:hidden + 省略号，长文案自己收尾。
+
+   修法（与上面 .slider-row 同一思路）：
+   1. 标签收紧到 56px（最长标签「导出格式」4 字 = 48px，留 8px 间隙）；
+   2. blank 解除 min-content 下限（min-width: 0）、basis 归零，让它跟着容器走；
+   3. 下拉回到 100% 实宽，由 blank 的可用宽度决定；
+   4. 文本溢出走单行省略号。 */
+.select-row {
+  :deep(.n-form-item) {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  :deep(.n-form-item .n-form-item-label) {
+    flex: 0 0 56px;
+    width: 56px;
+    min-width: 56px;
+    padding-right: 0;
+    white-space: nowrap;
+  }
+
+  :deep(.n-form-item .n-form-item-blank) {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  :deep(.n-form-item .n-select) {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* 选中值与占位文字都限制在自身盒内，超出用省略号收尾 */
+  :deep(.n-base-selection-label),
+  :deep(.n-base-selection-input),
+  :deep(.n-base-selection-placeholder) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 12px 字号下面板较窄，右内边距（给箭头留的 26px）可以收到 22px 多挤一点文字 */
+  :deep(.n-base-selection-input) {
+    padding-right: 22px;
+  }
+
+  /* 作为组内最后一项时不留行距，否则组底部会空出一块 */
+  &:last-child :deep(.n-form-item) {
+    margin-bottom: 0;
   }
 }
 

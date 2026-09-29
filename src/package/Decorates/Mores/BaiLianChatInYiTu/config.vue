@@ -101,59 +101,6 @@
                 />
               </div>
 
-              <!-- 消息级导出：每条回答脚注里的「导出 Word / TXT / MD」，
-                   与顶栏「导出」的区别是只导当前这一条，不导整个会话 -->
-              <div class="sub3">
-                <div class="sub3-head">消息导出按钮</div>
-                <CustomSwitch
-                  label="显示 Word / TXT / MD 按钮"
-                  v-model:value="optionData.showMsgExport"
-                  elMarginBottom="10px"
-                />
-                <template v-if="optionData.showMsgExport">
-                  <div class="subtitle">Word 排版（TXT / MD 导出不受此影响）</div>
-                  <CustomInputSelect
-                    label="排版预设"
-                    v-model:value="optionData.docxPreset"
-                    :options="docxPresetOptions"
-                  />
-                  <CustomInput
-                    label="公文标题字体"
-                    v-model:value="optionData.docxTitleFont"
-                    placeholder="留空 = 方正小标宋_GBK"
-                  />
-                  <div class="field">
-                    <div class="field-label">说明</div>
-                    <div class="tip">
-                      「标准公文格式」的页面设置：页边距上 3.5 / 下 2.9 / 左 2.55 / 右 2.55 cm，
-                      页眉 1.5 cm、页脚 2.6 cm，正文方正仿宋_GBK 三号，行距固定值 29.7 磅，
-                      首行缩进 2 字符，标题方正小标宋_GBK 二号居中，标题与副标题**段前段后均为 0 行**。<br />
-                      页脚页码为「— 1 —」，宋体四号、行距固定值 15 磅、文本前后各空 1 字符，
-                      按**双面打印**排：单页（奇数页）居右、双页（偶数页）居左。<br />
-                      字体只按字符分两路：**数字和字母用 Times New Roman**，其余（汉字、标点、符号）
-                      一律用该层次的字体或正文字体 —— 「—」「“”」「（」「%」这类符号不会跑到
-                      Times New Roman 上去（页码是例外，按规范整行宋体）。<br />
-                      正文的层次**按行首序数**自动换字体：「一、」方正黑体_GBK、
-                      「（一）」方正楷体_GBK、「1.」与「（1）」方正仿宋_GBK（与正文同），
-                      序数可以越级使用。标题下面紧跟的、整行被圆括号包住的一块
-                      （如「（2025-2027年）」）当作**副标题**，用方正楷体_GBK 居中排在标题正下方。<br />
-                      缩进只有一条口径：**所有段落（含标题、列表项、引用）都是首行缩进 2 字符** ——
-                      不做悬挂缩进，也不用"文本之前"的左缩进；无序列表不再带「·」「-」项目符号，
-                      有序列表保留「1.」但序号后不留空格；表格后面也不会多出一行空白。<br />
-                      模型先写在标题前面的话（「以下是为…：」）留在标题上面，用正文的字体字号；
-                      模型写的手动换行（一句一行）会换成回车，每行独立成段，
-                      不会出现字距被拉开的「应　　急　　指　　挥　　部」。<br />
-                      多余的空格与 emoji 图标都会在导出时清掉（中英文之间、数字前后的空格保留）——
-                      只清导出物，屏幕上显示的内容与「导出 MD」的原文都不动。<br />
-                      标题字体「方正小标宋_GBK」需本机已安装，未安装时 Word 会自动回退成默认字体。<br />
-                      「导出 TXT」给的是渲染后的纯文本（去掉 Markdown 符号、多余空格与 emoji，含 BOM 与 CRLF）；
-                      「导出 MD」给的是渲染**前**的原数据（Markdown 源码原样，不改换行、不加 BOM、
-                      不清空格也不去 emoji）。这两种都不含排版、不受上面两项设置影响。
-                    </div>
-                  </div>
-                </template>
-              </div>
-
               <div class="sub3">
                 <div class="sub3-head">对话前内容区</div>
                 <!-- 欢迎页四件套：图标 / 欢迎标题 / 欢迎语 / 预设问题，
@@ -203,6 +150,20 @@
                 <CustomSwitch label="显示点赞 / 点踩" v-model:value="optionData.showFeedback" elMarginBottom="10px" />
                 <!-- 对话区字号：气泡 + 欢迎页正文 -->
                 <InputNumberwithLabel label="字体大小" :min="10" :max="20" v-model:value="optionData.chatFontSize" />
+
+                <!-- 消息级导出：每条回答脚注里的「导出 Word / TXT / MD」，
+                     与顶栏「导出」的区别是只导当前这一条，不导整个会话 -->
+                <CustomSwitch
+                  label="显示 Word / TXT / MD 按钮"
+                  v-model:value="optionData.showMsgExport"
+                  elMarginBottom="10px"
+                />
+                <CustomInputSelect
+                  v-if="optionData.showMsgExport"
+                  label="Word 排版"
+                  v-model:value="optionData.docxPreset"
+                  :options="docxPresetOptions"
+                />
               </div>
 
               <!-- 由原一级设置降级下来，与上面三个区域平级 -->

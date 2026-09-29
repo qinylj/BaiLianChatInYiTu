@@ -6,6 +6,9 @@ package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
+# 自检脚本的中间产物（编译出的临时 JS、导出的样例文档）
+.tmp/
+
 # 本地与隐私文件
 *.local
 .env

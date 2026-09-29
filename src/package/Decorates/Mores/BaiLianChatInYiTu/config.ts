@@ -51,6 +51,13 @@ export const option = {
   readyText: '就绪',
   stopText: '停止',
   exportText: '导出',
+  /** 关闭按钮：显示在顶栏最右侧，点击后按平台约定置 chartConfig.status.hide 移除本组件。
+   *  默认关闭 —— 大屏上的组件通常由页面统一管理，不期望右上角多出一个叉 */
+  showCloseBtn: false,
+  closeText: '关闭',
+  /** 关闭前是否二次确认（误点代价高时打开） */
+  closeConfirm: false,
+  closeConfirmText: '确定关闭该对话窗口？',
   /** 导出格式：html=渲染后的排版（默认）/ txt=渲染后的纯文本 / md=Markdown 原文 /
    *  docx=Word 文档（默认按党政机关公文格式排版） */
   exportFormat: 'html',

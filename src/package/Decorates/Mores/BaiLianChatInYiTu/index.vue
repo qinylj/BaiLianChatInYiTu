@@ -187,6 +187,15 @@
               >
                 <span class="ac-down-icon"></span>{{ o.exportText }}
               </button>
+              <!-- 关闭按钮：走平台约定把 chartConfig.status.hide 置 true，让平台移除本组件 -->
+              <button
+                v-if="o.showCloseBtn"
+                class="ac-icon-btn ac-close-btn"
+                :title="o.closeText || '关闭'"
+                @click="askClose"
+              >
+                <span class="ac-close-icon"></span>
+              </button>
             </div>
           </header>
 
@@ -456,6 +465,17 @@
       </div>
     </div>
 
+    <!-- 关闭确认：关闭会从大屏移除本组件，误点代价高，可选二次确认 -->
+    <div v-if="closeConfirmShow" class="ac-confirm-mask" @click.self="cancelClose">
+      <div class="ac-confirm">
+        <div class="ac-confirm-text">{{ o.closeConfirmText || '确定关闭该对话窗口？' }}</div>
+        <div class="ac-confirm-acts">
+          <button class="ac-confirm-btn" @click="cancelClose">取消</button>
+          <button class="ac-confirm-btn danger" @click="confirmClose">确认关闭</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 底部浮现提示：只用于"静默失败"的点（下载被 iframe 拦截、复制不可用），
          不做通用通知系统 —— 大屏上弹 toast 很吵，能不用就不用。 -->
     <div v-if="toast" class="ac-toast">{{ toast }}</div>
@@ -547,6 +567,7 @@ const emit = defineEmits<{
   (e: 'ask', payload: { text: string }): void
   (e: 'reply', payload: { text: string; sessionId: string }): void
   (e: 'error', payload: { message: string }): void
+  (e: 'closed'): void
 }>()
 
 const { useCustomRendered } = useEvent()
@@ -1665,8 +1686,56 @@ const destroy = () => {
   dismissedParams.value = []
 }
 
+/**
+ * 关闭按钮：按平台约定销毁本组件。
+ *
+ * 平台的组件实例存在 `props.chartConfig.status.hide`，画布据此决定渲不渲染这个组件
+ * —— 这正是"从大屏上移除"的官方入口（平台自己的图层面板就是改这个字段）。
+ * chartConfig 是平台传进来的**响应式对象**，直接改它就是改平台状态。
+ *
+ * 顺序很重要：先做组件内部的收尾（中止在途请求、清掉暂存的参数徽章），
+ * 再置 hide —— 否则请求还挂在网上、abort 回调又在组件被移走后才跑，会留下悬挂的连接。
+ *
+ * 兜底：平台若没给 status（理论上不会），退化成只做内部清理，
+ * 至少不会把在途请求漏掉，也不会抛错把界面搞崩。
+ */
+const closeWindow = () => {
+  destroy()
+  emit('closed')
+  const cc: any = props.chartConfig
+  if (cc && cc.status && typeof cc.status === 'object') {
+    cc.status.hide = true
+  } else {
+    console.warn('[BaiLianChatInYiTu] chartConfig.status 不可用，无法移除组件，仅完成内部清理')
+  }
+  if (props.bus && typeof props.bus.emit === 'function') {
+    props.bus.emit('agent-chat:close', { id: cc && cc.id })
+  }
+}
+
+/** 关闭确认浮层（零依赖，自己画） */
+const closeConfirmShow = ref(false)
+
+/** 点关闭：配了"二次确认"就先弹确认，否则直接关 */
+const askClose = () => {
+  if (o.value.closeConfirm) {
+    closeConfirmShow.value = true
+    return
+  }
+  closeWindow()
+}
+
+const confirmClose = () => {
+  closeConfirmShow.value = false
+  closeWindow()
+}
+
+const cancelClose = () => {
+  closeConfirmShow.value = false
+}
+
 // 平台「隐藏即销毁」会调这个（官方拼写就是 destory，两个名字都暴露以防万一）
-defineExpose({ destoryComponent: destroy, destroyComponent: destroy })
+defineExpose({ destoryComponent: destroy, destroyComponent: destroy, close: closeWindow })
 
 watch(
   () => o.value.persistHistory,
@@ -1710,7 +1779,7 @@ onBeforeUnmount(() => {
 <script lang="ts">
 export default {
   name: 'BaiLianChatInYiTu',
-  version: '1.0.12'
+  version: '1.0.14'
 }
 </script>
 
@@ -1889,6 +1958,43 @@ export default {
 
   &.left {
     transform: rotate(45deg);
+  }
+}
+
+/* 关闭按钮：沿用 .ac-icon-btn 的尺寸与底色，只把 hover 点亮成警示红。
+   图标用两条伪元素画叉，不引图标字体 —— 运行组件对外保持零依赖。 */
+.ac-close-btn {
+  &:hover {
+    color: #ff6b6b;
+    border-color: color-mix(in srgb, #ff6b6b 55%, transparent);
+    background: color-mix(in srgb, #ff6b6b 14%, transparent);
+  }
+}
+
+.ac-close-icon {
+  position: relative;
+  width: 11px;
+  height: 11px;
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 100%;
+    height: 1.5px;
+    margin-top: -0.75px;
+    border-radius: 1px;
+    background: currentColor;
+  }
+
+  &::before {
+    transform: rotate(45deg);
+  }
+
+  &::after {
+    transform: rotate(-45deg);
   }
 }
 
@@ -2750,6 +2856,83 @@ export default {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
   pointer-events: none;
   animation: ac-toast-in 0.18s ease-out;
+}
+
+/* ---------------- 关闭确认浮层 ----------------
+   关闭按钮会从大屏移除本组件，误点代价高。
+   这里用自己画的浮层而不是引入 UI 库的对话框：运行组件对外必须零依赖。
+   遮罩点击（@click.self）等同取消，符合直觉。 */
+.ac-confirm-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(1.5px);
+}
+
+.ac-confirm {
+  min-width: 220px;
+  max-width: 84%;
+  padding: 16px 18px 14px;
+  border-radius: 10px;
+  background: var(--ac-panel-solid);
+  border: 1px solid var(--ac-border-strong);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.42);
+  animation: ac-confirm-in 0.16s ease-out;
+}
+
+@keyframes ac-confirm-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.ac-confirm-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ac-text);
+}
+
+.ac-confirm-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ac-confirm-btn {
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--ac-text-dim);
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--ac-border);
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+
+  &:hover {
+    color: var(--ac-text);
+    border-color: var(--ac-border-strong);
+  }
+
+  &.danger {
+    color: #fff;
+    background: var(--ac-danger);
+    border-color: var(--ac-danger);
+
+    &:hover {
+      color: #fff;
+      filter: brightness(1.12);
+    }
+  }
 }
 
 @keyframes ac-toast-in {

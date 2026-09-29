@@ -101,6 +101,19 @@
                     :options="exportFormatOptions"
                   />
                 </div>
+
+                <CustomSwitch label="显示关闭按钮" v-model:value="optionData.showCloseBtn" elMarginBottom="10px" />
+                <template v-if="optionData.showCloseBtn">
+                  <div class="tip">点击后置平台 chartConfig.status.hide，把本组件从大屏移除。</div>
+                  <CustomInput label="按钮提示文字" v-model:value="optionData.closeText" placeholder="关闭" />
+                  <CustomSwitch label="关闭前二次确认" v-model:value="optionData.closeConfirm" elMarginBottom="10px" />
+                  <CustomInput
+                    v-if="optionData.closeConfirm"
+                    label="确认文案"
+                    v-model:value="optionData.closeConfirmText"
+                    placeholder="确定关闭该对话窗口？"
+                  />
+                </template>
               </div>
 
               <div class="sub3">
